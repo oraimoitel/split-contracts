@@ -369,6 +369,62 @@ impl SplitContract {
         events::invoice_refunded(&env, invoice_id);
     }
 
+    /// Save a reusable invoice template under a named key.
+    ///
+    /// Calling again with the same `name` overwrites the existing template.
+    pub fn save_template(
+        env: Env,
+        creator: Address,
+        name: Symbol,
+        recipients: Vec<Address>,
+        amounts: Vec<i128>,
+        token: Address,
+    ) {
+        creator.require_auth();
+        assert!(
+            recipients.len() == amounts.len(),
+            "recipients and amounts length mismatch"
+        );
+        assert!(!recipients.is_empty(), "must have at least one recipient");
+        for amt in amounts.iter() {
+            assert!(amt > 0, "amounts must be positive");
+        }
+        let template = InvoiceTemplate { recipients, amounts, token };
+        env.storage().persistent().set(&template_key(&creator, &name), &template);
+    }
+
+    /// Create a new invoice from a previously saved template.
+    ///
+    /// # Returns
+    /// The new invoice ID.
+    pub fn create_from_template(
+        env: Env,
+        creator: Address,
+        name: Symbol,
+        deadline: u64,
+    ) -> u64 {
+        creator.require_auth();
+        let tmpl: InvoiceTemplate = env
+            .storage()
+            .persistent()
+            .get(&template_key(&creator, &name))
+            .expect("template not found");
+        Self::_create_invoice(&env, creator, tmpl.recipients, tmpl.amounts, tmpl.token, deadline)
+    }
+
+    /// Return the total amount contributed by `payer` toward `invoice_id`.
+    ///
+    /// Returns 0 if the address has not paid. Requires no auth (read-only).
+    pub fn get_payer_total(env: Env, invoice_id: u64, payer: Address) -> i128 {
+        let invoice = load_invoice(&env, invoice_id);
+        invoice
+            .payments
+            .iter()
+            .filter(|p| p.payer == payer)
+            .map(|p| p.amount)
+            .sum()
+    }
+
     /// Cancel an invoice before any payments are made.
     pub fn cancel_invoice(env: Env, caller: Address, invoice_id: u64) {
         require_not_paused(&env);
@@ -393,7 +449,7 @@ impl SplitContract {
             );
         }
 
-        invoice.status = InvoiceStatus::Cancelled;
+        invoice.status = InvoiceStatus::Refunded;
         save_invoice(&env, invoice_id, &invoice);
         append_audit_entry(&env, invoice_id, symbol_short!("cancel"), &caller);
     }
@@ -667,6 +723,7 @@ impl SplitContract {
             }
         }
 
+        // All transfers succeeded — persist state change now.
         invoice.status = InvoiceStatus::Released;
         save_invoice(env, invoice_id, invoice);
         append_audit_entry(env, invoice_id, symbol_short!("release"), actor);
