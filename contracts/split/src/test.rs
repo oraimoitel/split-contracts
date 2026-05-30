@@ -38,20 +38,20 @@ fn token_client<'a>(env: &'a Env, token_id: &Address) -> TokenClient<'a> {
 
 fn default_options(env: &Env) -> InvoiceOptions {
     InvoiceOptions {
-            co_creators: Vec::new(env),
-            allow_early_withdrawal: false,
-            bonus_pool: 0,
-            bonus_max_payers: 0,
-            prerequisite_id: None,
-            tranches: Vec::new(env),
-            co_signers: Vec::new(env),
-            required_signatures: 0,
-            penalty_bps: None,
-            penalty_deadline: None,
-            min_funding_bps: None,
-        }
+        co_creators: Vec::new(env),
+        allow_early_withdrawal: false,
+        bonus_pool: 0,
+        bonus_max_payers: 0,
+        prerequisite_id: None,
+        tranches: Vec::new(env),
+        co_signers: Vec::new(env),
+        required_signatures: 0,
+        penalty_bps: None,
+        penalty_deadline: None,
+        min_funding_bps: None,
+        max_payers: None,
     }
-    }
+}
 
 /// Create a basic single-recipient invoice with default optional params.
 fn make_invoice(
@@ -2329,4 +2329,220 @@ fn test_min_funding_bps_allows_release_above_threshold() {
 
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
     assert_eq!(tk.balance(&recipient), 900);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #26 — max_payers limit
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_max_payers_none_unlimited_payers() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let tk = token_client(&env, &token_id);
+
+    let creator = Address::generate(&env);
+    let payer1 = Address::generate(&env);
+    let payer2 = Address::generate(&env);
+    let payer3 = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let sa = StellarAssetClient::new(&env, &token_id);
+    sa.mint(&payer1, &2_000);
+    sa.mint(&payer2, &2_000);
+    sa.mint(&payer3, &2_000);
+
+    env.ledger().set_timestamp(1_000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient.clone());
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(1_000_i128);
+
+    let id = c.create_invoice(
+        &creator,
+        &recipients,
+        &amounts,
+        &token_id,
+        &9_999_u64,
+        &InvoiceOptions {
+            co_creators: Vec::new(&env),
+            allow_early_withdrawal: false,
+            bonus_pool: 0,
+            bonus_max_payers: 0,
+            prerequisite_id: None,
+            tranches: Vec::new(&env),
+            co_signers: Vec::new(&env),
+            required_signatures: 0,
+            penalty_bps: None,
+            penalty_deadline: None,
+            min_funding_bps: None,
+            max_payers: None, // No cap
+        },
+    );
+
+    c.pay(&payer1, &id, &100_i128, &0_u64, &false);
+    c.pay(&payer2, &id, &100_i128, &0_u64, &false);
+    c.pay(&payer3, &id, &100_i128, &0_u64, &false);
+
+    let invoice = c.get_invoice(&id);
+    assert_eq!(invoice.payments.len(), 3);
+}
+
+#[test]
+fn test_max_payers_some_enforces_limit() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+
+    let creator = Address::generate(&env);
+    let payer1 = Address::generate(&env);
+    let payer2 = Address::generate(&env);
+    let payer3 = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let sa = StellarAssetClient::new(&env, &token_id);
+    sa.mint(&payer1, &2_000);
+    sa.mint(&payer2, &2_000);
+    sa.mint(&payer3, &2_000);
+
+    env.ledger().set_timestamp(1_000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient.clone());
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(1_000_i128);
+
+    let id = c.create_invoice(
+        &creator,
+        &recipients,
+        &amounts,
+        &token_id,
+        &9_999_u64,
+        &InvoiceOptions {
+            co_creators: Vec::new(&env),
+            allow_early_withdrawal: false,
+            bonus_pool: 0,
+            bonus_max_payers: 0,
+            prerequisite_id: None,
+            tranches: Vec::new(&env),
+            co_signers: Vec::new(&env),
+            required_signatures: 0,
+            penalty_bps: None,
+            penalty_deadline: None,
+            min_funding_bps: None,
+            max_payers: Some(2), // Cap at 2 unique payers
+        },
+    );
+
+    // First two payers should succeed
+    c.pay(&payer1, &id, &100_i128, &0_u64, &false);
+    c.pay(&payer2, &id, &100_i128, &0_u64, &false);
+
+    // Third unique payer should panic
+    c.pay(&payer3, &id, &100_i128, &0_u64, &false);
+}
+
+#[test]
+#[should_panic(expected = "payer limit reached")]
+fn test_max_payers_rejects_third_unique_payer() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+
+    let creator = Address::generate(&env);
+    let payer1 = Address::generate(&env);
+    let payer2 = Address::generate(&env);
+    let payer3 = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let sa = StellarAssetClient::new(&env, &token_id);
+    sa.mint(&payer1, &2_000);
+    sa.mint(&payer2, &2_000);
+    sa.mint(&payer3, &2_000);
+
+    env.ledger().set_timestamp(1_000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient.clone());
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(1_000_i128);
+
+    let id = c.create_invoice(
+        &creator,
+        &recipients,
+        &amounts,
+        &token_id,
+        &9_999_u64,
+        &InvoiceOptions {
+            co_creators: Vec::new(&env),
+            allow_early_withdrawal: false,
+            bonus_pool: 0,
+            bonus_max_payers: 0,
+            prerequisite_id: None,
+            tranches: Vec::new(&env),
+            co_signers: Vec::new(&env),
+            required_signatures: 0,
+            penalty_bps: None,
+            penalty_deadline: None,
+            min_funding_bps: None,
+            max_payers: Some(2), // Cap at 2 unique payers
+        },
+    );
+
+    c.pay(&payer1, &id, &100_i128, &0_u64, &false);
+    c.pay(&payer2, &id, &100_i128, &0_u64, &false);
+    c.pay(&payer3, &id, &100_i128, &0_u64, &false); // Should panic
+}
+
+#[test]
+fn test_max_payers_allows_existing_payer_at_cap() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+
+    let creator = Address::generate(&env);
+    let payer1 = Address::generate(&env);
+    let payer2 = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let sa = StellarAssetClient::new(&env, &token_id);
+    sa.mint(&payer1, &2_000);
+    sa.mint(&payer2, &2_000);
+
+    env.ledger().set_timestamp(1_000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient.clone());
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(1_000_i128);
+
+    let id = c.create_invoice(
+        &creator,
+        &recipients,
+        &amounts,
+        &token_id,
+        &9_999_u64,
+        &InvoiceOptions {
+            co_creators: Vec::new(&env),
+            allow_early_withdrawal: false,
+            bonus_pool: 0,
+            bonus_max_payers: 0,
+            prerequisite_id: None,
+            tranches: Vec::new(&env),
+            co_signers: Vec::new(&env),
+            required_signatures: 0,
+            penalty_bps: None,
+            penalty_deadline: None,
+            min_funding_bps: None,
+            max_payers: Some(2), // Cap at 2 unique payers
+        },
+    );
+
+    c.pay(&payer1, &id, &100_i128, &0_u64, &false);
+    c.pay(&payer2, &id, &100_i128, &0_u64, &false);
+
+    // Payer1 pays again when cap is already at limit — should succeed
+    c.pay(&payer1, &id, &200_i128, &1_u64, &false);
+
+    let invoice = c.get_invoice(&id);
+    assert_eq!(invoice.payments.len(), 3);
+    assert_eq!(invoice.funded, 400);
 }

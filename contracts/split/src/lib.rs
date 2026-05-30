@@ -313,7 +313,7 @@ impl SplitContract {
     /// * `token`   – token contract address (same for all recipients)
     /// * `options` – optional fields: co_creators, allow_early_withdrawal, bonus_pool,
     ///               bonus_max_payers, prerequisite_id (#22), tranches (#23),
-    ///               stake_amount (#89), referrer (#87)
+    ///               stake_amount (#89), referrer (#87), max_payers (#26)
     pub fn create_invoice(
         env: Env,
         creator: Address,
@@ -343,6 +343,7 @@ impl SplitContract {
             options.penalty_bps.unwrap_or(0),
             options.penalty_deadline.unwrap_or(0),
             options.min_funding_bps.unwrap_or(0),
+            options.max_payers,
         )
     }
 
@@ -365,6 +366,7 @@ impl SplitContract {
         penalty_bps: u32,
         penalty_deadline: u64,
         min_funding_bps: u32,
+        max_payers: Option<u32>,
     ) -> u64 {
         assert!(
             recipients.len() == amounts.len(),
@@ -490,6 +492,7 @@ impl SplitContract {
             penalty_bps,
             penalty_deadline,
             min_funding_bps,
+            max_payers,
         };
 
         save_invoice(env, id, &invoice);
@@ -538,6 +541,7 @@ impl SplitContract {
                 0,
                 0,
                 0,
+                None,
             );
             ids.push_back(id);
         }
@@ -583,7 +587,7 @@ impl SplitContract {
             0,
             0,
             0,
-            0,
+            None,
         );
 
         if months > 1 {
@@ -652,6 +656,26 @@ impl SplitContract {
         env.storage()
             .persistent()
             .set(&nonce_key(invoice_id, payer), &(stored_nonce + 1));
+
+        // Check payer limit (issue #26).
+        if let Some(max_payers_cap) = invoice.max_payers {
+            let is_existing_payer = invoice.payments.iter().any(|p| p.payer == *payer);
+            if !is_existing_payer {
+                let unique_payer_count = {
+                    let mut seen: Vec<Address> = Vec::new(env);
+                    for payment in invoice.payments.iter() {
+                        if !seen.contains(&payment.payer) {
+                            seen.push_back(payment.payer.clone());
+                        }
+                    }
+                    seen.len() as u32
+                };
+                assert!(
+                    unique_payer_count < max_payers_cap,
+                    "payer limit reached"
+                );
+            }
+        }
 
         let token_client = token::Client::new(env, &invoice.tokens.get(0).expect("no token"));
         
@@ -1098,6 +1122,7 @@ impl SplitContract {
                 0,
                 0,
                 0,
+                None,
             );
             env.storage()
                 .persistent()
@@ -1338,6 +1363,7 @@ impl SplitContract {
             old_invoice.penalty_bps,
             old_invoice.penalty_deadline,
             old_invoice.min_funding_bps,
+            None, // No max_payers on rollover
         );
 
         // Load the newly created invoice and copy over the payments.
@@ -1465,6 +1491,7 @@ impl SplitContract {
             0,
             0,
             0,
+            None,
         )
     }
 

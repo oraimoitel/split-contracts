@@ -93,6 +93,8 @@ pub struct InvoiceOptions {
     pub penalty_deadline: Option<u64>,
     /// Minimum funding threshold in basis points (issue #43).
     pub min_funding_bps: Option<u32>,
+    /// Maximum number of unique payers allowed (issue #26); None means no cap.
+    pub max_payers: Option<u32>,
 }
 
 /// Legacy invoice layout used by stored invoices created before the `version`
@@ -173,6 +175,8 @@ pub struct Invoice {
     pub penalty_deadline: u64,
     /// Minimum funding threshold in basis points (issue #43); 0 means 100%.
     pub min_funding_bps: u32,
+    /// Maximum number of unique payers allowed (issue #26); None means no cap.
+    pub max_payers: Option<u32>,
 }
 
 impl Invoice {
@@ -209,6 +213,7 @@ impl Invoice {
             penalty_bps: 0,
             penalty_deadline: 0,
             min_funding_bps: 0,
+            max_payers: None,
         }
     }
 }
