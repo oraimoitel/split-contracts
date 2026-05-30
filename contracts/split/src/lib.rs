@@ -1036,6 +1036,70 @@ impl SplitContract {
         append_audit_entry(&env, invoice_id, symbol_short!("extend"), &caller);
     }
 
+    /// Roll over a partially funded invoice to a new invoice with the same recipients,
+    /// amounts, and token. Carries over all existing payments and marks the old invoice
+    /// as Refunded without transferring tokens.
+    ///
+    /// Requires creator auth. The old invoice must be Pending and past its deadline.
+    /// The new deadline must be in the future.
+    pub fn rollover_invoice(env: Env, caller: Address, invoice_id: u64, new_deadline: u64) -> u64 {
+        require_not_paused(&env);
+        caller.require_auth();
+
+        let mut old_invoice = load_invoice(&env, invoice_id);
+
+        assert!(
+            old_invoice.status == InvoiceStatus::Pending,
+            "invoice is not pending"
+        );
+        assert!(
+            old_invoice.creator == caller,
+            "only creator can rollover invoice"
+        );
+        assert!(
+            env.ledger().timestamp() > old_invoice.deadline,
+            "invoice deadline has not passed"
+        );
+        assert!(
+            new_deadline > env.ledger().timestamp(),
+            "new deadline must be in the future"
+        );
+
+        // Create new invoice with same recipients, amounts, and token.
+        let new_id = Self::_create_invoice_inner(
+            &env,
+            old_invoice.creator.clone(),
+            old_invoice.recipients.clone(),
+            old_invoice.amounts.clone(),
+            old_invoice.tokens.get(0).expect("no token"),
+            new_deadline,
+            old_invoice.co_creators.clone(),
+            old_invoice.allow_early_withdrawal,
+            0, // No bonus pool on rollover
+            0, // No bonus max payers on rollover
+            old_invoice.prerequisite_id.clone(),
+            old_invoice.tranches.clone(),
+            old_invoice.co_signers.clone(),
+            old_invoice.required_signatures,
+        );
+
+        // Load the newly created invoice and copy over the payments.
+        let mut new_invoice = load_invoice(&env, new_id);
+        new_invoice.payments = old_invoice.payments.clone();
+        new_invoice.funded = old_invoice.funded;
+        save_invoice(&env, new_id, &new_invoice);
+
+        // Mark old invoice as Refunded without transferring tokens.
+        old_invoice.status = InvoiceStatus::Refunded;
+        old_invoice.completion_time = Some(env.ledger().timestamp());
+        save_invoice(&env, invoice_id, &old_invoice);
+
+        append_audit_entry(&env, invoice_id, symbol_short!("rollover"), &caller);
+        append_audit_entry(&env, new_id, symbol_short!("rollover"), &caller);
+
+        new_id
+    }
+
     // -----------------------------------------------------------------------
     // Add recipient
     // -----------------------------------------------------------------------
