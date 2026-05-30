@@ -334,6 +334,8 @@ impl SplitContract {
             options.tranches,
             options.co_signers,
             options.required_signatures,
+            options.penalty_bps.unwrap_or(0),
+            options.penalty_deadline.unwrap_or(0),
         )
     }
 
@@ -353,6 +355,8 @@ impl SplitContract {
         tranches: Vec<Tranche>,
         co_signers: Vec<Address>,
         required_signatures: u32,
+        penalty_bps: u32,
+        penalty_deadline: u64,
     ) -> u64 {
         assert!(
             recipients.len() == amounts.len(),
@@ -361,6 +365,7 @@ impl SplitContract {
         assert!(!recipients.is_empty(), "must have at least one recipient");
         assert!(deadline > env.ledger().timestamp(), "deadline must be in the future");
         assert!(bonus_pool >= 0, "bonus_pool must be non-negative");
+        assert!(penalty_bps <= 10_000, "penalty_bps must be ≤ 10000");
 
         for amt in amounts.iter() {
             assert!(amt > 0, "amounts must be positive");
@@ -450,6 +455,8 @@ impl SplitContract {
             signatures: Vec::new(env),
             approver: None,
             approved: false,
+            penalty_bps,
+            penalty_deadline,
         };
 
         save_invoice(env, id, &invoice);
@@ -496,6 +503,8 @@ impl SplitContract {
                 Vec::new(&env),
                 Vec::new(&env),
                 0,
+                0,
+                0,
             );
             ids.push_back(id);
         }
@@ -538,6 +547,8 @@ impl SplitContract {
             None,
             Vec::new(&env),
             Vec::new(&env),
+            0,
+            0,
             0,
         );
 
@@ -606,6 +617,29 @@ impl SplitContract {
 
         let token_client = token::Client::new(env, &invoice.tokens.get(0).expect("no token"));
         token_client.transfer(payer, &env.current_contract_address(), &amount);
+
+        // Penalty for late payment (issue #42).
+        if invoice.penalty_bps > 0 && env.ledger().timestamp() > invoice.penalty_deadline {
+            let penalty_amount = (amount as u128 * invoice.penalty_bps as u128 / 10_000u128) as i128;
+            if penalty_amount > 0 {
+                let total_amounts: i128 = invoice.amounts.iter().sum();
+                let mut distributed: i128 = 0;
+                let n = invoice.recipients.len();
+                for i in 0..n {
+                    let recipient = invoice.recipients.get(i).unwrap();
+                    let amt = invoice.amounts.get(i).unwrap();
+                    let share = if i == n - 1 {
+                        penalty_amount - distributed
+                    } else {
+                        (penalty_amount as u128 * amt as u128 / total_amounts as u128) as i128
+                    };
+                    distributed += share;
+                    if share > 0 {
+                        token_client.transfer(payer, &recipient, &share);
+                    }
+                }
+            }
+        }
 
         invoice.payments.push_back(Payment { payer: payer.clone(), amount, tip: 0 });
         invoice.funded += amount;
@@ -956,6 +990,8 @@ impl SplitContract {
                 Vec::new(env),
                 Vec::new(env),
                 0,
+                0,
+                0,
             );
             env.storage()
                 .persistent()
@@ -1146,6 +1182,8 @@ impl SplitContract {
             old_invoice.tranches.clone(),
             old_invoice.co_signers.clone(),
             old_invoice.required_signatures,
+            old_invoice.penalty_bps,
+            old_invoice.penalty_deadline,
         );
 
         // Load the newly created invoice and copy over the payments.
@@ -1269,6 +1307,8 @@ impl SplitContract {
             None,
             Vec::new(&env),
             Vec::new(&env),
+            0,
+            0,
             0,
         )
     }

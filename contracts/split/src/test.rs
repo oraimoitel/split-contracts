@@ -46,7 +46,10 @@ fn default_options(env: &Env) -> InvoiceOptions {
             tranches: Vec::new(env),
             co_signers: Vec::new(env),
             required_signatures: 0,
+            penalty_bps: None,
+            penalty_deadline: None,
         }
+    }
     }
 
 /// Create a basic single-recipient invoice with default optional params.
@@ -780,6 +783,8 @@ fn test_bonus_pool_distributed_to_first_payer() {
             tranches: Vec::new(&env),
             co_signers: Vec::new(&env),
             required_signatures: 0,
+            penalty_bps: None,
+            penalty_deadline: None,
         },
     );
 
@@ -1018,6 +1023,8 @@ fn test_release_blocked_by_prerequisite() {
             tranches: Vec::new(&env),
             co_signers: Vec::new(&env),
             required_signatures: 0,
+            penalty_bps: None,
+            penalty_deadline: None,
         },
     );
 
@@ -1063,6 +1070,8 @@ fn test_release_succeeds_after_prerequisite_released() {
             tranches: Vec::new(&env),
             co_signers: Vec::new(&env),
             required_signatures: 0,
+            penalty_bps: None,
+            penalty_deadline: None,
         },
     );
 
@@ -1141,6 +1150,8 @@ fn test_tranches_partial_then_full_release() {
             tranches: tranches.clone(),
             co_signers: Vec::new(&env),
             required_signatures: 0,
+            penalty_bps: None,
+            penalty_deadline: None,
         },
     );
 
@@ -1201,6 +1212,8 @@ fn test_release_before_any_tranche_unlocked_panics() {
             tranches: tranches.clone(),
             co_signers: Vec::new(&env),
             required_signatures: 0,
+            penalty_bps: None,
+            penalty_deadline: None,
         },
     );
 
@@ -1898,6 +1911,8 @@ fn test_platform_fee_bps_with_tranches() {
             tranches: tranches.clone(),
             co_signers: Vec::new(&env),
             required_signatures: 0,
+            penalty_bps: None,
+            penalty_deadline: None,
         },
     );
 
@@ -1919,4 +1934,215 @@ fn test_platform_fee_bps_with_tranches() {
     // Another 450 to recipient, another 50 to treasury.
     assert_eq!(tk.balance(&recipient), 900);
     assert_eq!(tk.balance(&treasury), 100);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #42 — late-payment penalty
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_penalty_not_applied_before_penalty_deadline() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let tk = token_client(&env, &token_id);
+
+    let creator = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let sa = StellarAssetClient::new(&env, &token_id);
+    sa.mint(&payer, &1_000);
+
+    env.ledger().set_timestamp(1_000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient.clone());
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(500_i128);
+
+    let id = c.create_invoice(
+        &creator,
+        &recipients,
+        &amounts,
+        &token_id,
+        &9_999_u64,
+        &InvoiceOptions {
+            co_creators: Vec::new(&env),
+            allow_early_withdrawal: false,
+            bonus_pool: 0,
+            bonus_max_payers: 0,
+            prerequisite_id: None,
+            tranches: Vec::new(&env),
+            co_signers: Vec::new(&env),
+            required_signatures: 0,
+            penalty_bps: Some(1_000), // 10 %
+            penalty_deadline: Some(2_000),
+        },
+    );
+
+    // Pay at t=1_000 which is before penalty_deadline.
+    c.pay(&payer, &id, &500_i128, &0_u64);
+
+    // Recipient gets full 500, no penalty.
+    assert_eq!(tk.balance(&recipient), 500);
+    // Payer paid exactly 500.
+    assert_eq!(tk.balance(&payer), 500);
+}
+
+#[test]
+fn test_penalty_applied_after_penalty_deadline() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let tk = token_client(&env, &token_id);
+
+    let creator = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let sa = StellarAssetClient::new(&env, &token_id);
+    sa.mint(&payer, &1_000);
+
+    env.ledger().set_timestamp(1_000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient.clone());
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(500_i128);
+
+    let id = c.create_invoice(
+        &creator,
+        &recipients,
+        &amounts,
+        &token_id,
+        &9_999_u64,
+        &InvoiceOptions {
+            co_creators: Vec::new(&env),
+            allow_early_withdrawal: false,
+            bonus_pool: 0,
+            bonus_max_payers: 0,
+            prerequisite_id: None,
+            tranches: Vec::new(&env),
+            co_signers: Vec::new(&env),
+            required_signatures: 0,
+            penalty_bps: Some(1_000), // 10 %
+            penalty_deadline: Some(2_000),
+        },
+    );
+
+    // Advance past penalty deadline.
+    env.ledger().set_timestamp(3_000);
+    c.pay(&payer, &id, &500_i128, &0_u64);
+
+    // Recipient gets 500 (normal) + 50 (penalty) = 550.
+    assert_eq!(tk.balance(&recipient), 550);
+    // Payer paid 500 + 50 = 550.
+    assert_eq!(tk.balance(&payer), 450);
+}
+
+#[test]
+fn test_penalty_distributed_proportionally_multi_recipient() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let tk = token_client(&env, &token_id);
+
+    let creator = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+
+    let sa = StellarAssetClient::new(&env, &token_id);
+    sa.mint(&payer, &2_000);
+
+    env.ledger().set_timestamp(1_000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(r1.clone());
+    recipients.push_back(r2.clone());
+    recipients.push_back(r3.clone());
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(100_i128);
+    amounts.push_back(200_i128);
+    amounts.push_back(700_i128);
+
+    let id = c.create_invoice(
+        &creator,
+        &recipients,
+        &amounts,
+        &token_id,
+        &9_999_u64,
+        &InvoiceOptions {
+            co_creators: Vec::new(&env),
+            allow_early_withdrawal: false,
+            bonus_pool: 0,
+            bonus_max_payers: 0,
+            prerequisite_id: None,
+            tranches: Vec::new(&env),
+            co_signers: Vec::new(&env),
+            required_signatures: 0,
+            penalty_bps: Some(1_000), // 10 %
+            penalty_deadline: Some(2_000),
+        },
+    );
+
+    // Pay after penalty deadline.
+    env.ledger().set_timestamp(3_000);
+    c.pay(&payer, &id, &1_000_i128, &0_u64);
+
+    // Penalty = 1000 * 10% = 100
+    // Distribution: r1=10, r2=20, r3=70
+    assert_eq!(tk.balance(&r1), 100 + 10); // normal + penalty
+    assert_eq!(tk.balance(&r2), 200 + 20);
+    assert_eq!(tk.balance(&r3), 700 + 70);
+    // Payer paid 1000 + 100 = 1100.
+    assert_eq!(tk.balance(&payer), 900);
+}
+
+#[test]
+fn test_penalty_bps_zero_no_penalty_even_after_deadline() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let tk = token_client(&env, &token_id);
+
+    let creator = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let sa = StellarAssetClient::new(&env, &token_id);
+    sa.mint(&payer, &1_000);
+
+    env.ledger().set_timestamp(1_000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient.clone());
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(500_i128);
+
+    // penalty_bps = 0 means no penalty even after penalty_deadline.
+    let id = c.create_invoice(
+        &creator,
+        &recipients,
+        &amounts,
+        &token_id,
+        &9_999_u64,
+        &InvoiceOptions {
+            co_creators: Vec::new(&env),
+            allow_early_withdrawal: false,
+            bonus_pool: 0,
+            bonus_max_payers: 0,
+            prerequisite_id: None,
+            tranches: Vec::new(&env),
+            co_signers: Vec::new(&env),
+            required_signatures: 0,
+            penalty_bps: Some(0),
+            penalty_deadline: Some(2_000),
+        },
+    );
+
+    env.ledger().set_timestamp(3_000);
+    c.pay(&payer, &id, &500_i128, &0_u64);
+
+    // Recipient gets full 500, no penalty.
+    assert_eq!(tk.balance(&recipient), 500);
+    assert_eq!(tk.balance(&payer), 500);
 }
