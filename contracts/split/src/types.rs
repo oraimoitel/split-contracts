@@ -93,6 +93,12 @@ pub struct InvoiceOptions {
     pub penalty_deadline: Option<u64>,
     /// Minimum funding threshold in basis points (issue #43).
     pub min_funding_bps: Option<u32>,
+    /// Stake amount from creator (issue #89).
+    pub stake_amount: i128,
+    /// Referrer address for referral tracking (issue #87).
+    pub referrer: Option<Address>,
+    /// Optional vesting cliff timestamp (issue #27); None means no cliff.
+    pub vesting_cliff: Option<u64>,
 }
 
 /// Legacy invoice layout used by stored invoices created before the `version`
@@ -173,12 +179,26 @@ pub struct Invoice {
     pub penalty_deadline: u64,
     /// Minimum funding threshold in basis points (issue #43); 0 means 100%.
     pub min_funding_bps: u32,
+    /// Stake amount (issue #89).
+    pub stake_amount: i128,
+    /// Referrer address (issue #87).
+    pub referrer: Option<Address>,
+    /// Optional vesting cliff timestamp (issue #27); None means no cliff.
+    pub vesting_cliff: Option<u64>,
+    /// Tracks which recipients have claimed after vesting cliff (parallel to recipients).
+    pub vesting_cliff_claimed: Vec<bool>,
 }
 
 impl Invoice {
     /// Upgrade a legacy (pre-version) invoice to the current schema.
     /// New fields are filled with their default (empty / zero) values.
     pub fn from_legacy(old: LegacyInvoice, env: &Env) -> Self {
+        let num_recipients = old.recipients.len();
+        let mut vesting_cliff_claimed = Vec::new(env);
+        for _ in 0..num_recipients {
+            vesting_cliff_claimed.push_back(false);
+        }
+
         Invoice {
             version: 2,
             creator: old.creator,
@@ -209,6 +229,10 @@ impl Invoice {
             penalty_bps: 0,
             penalty_deadline: 0,
             min_funding_bps: 0,
+            stake_amount: old.stake_amount,
+            referrer: old.referrer,
+            vesting_cliff: None,
+            vesting_cliff_claimed,
         }
     }
 }

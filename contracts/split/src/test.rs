@@ -38,20 +38,22 @@ fn token_client<'a>(env: &'a Env, token_id: &Address) -> TokenClient<'a> {
 
 fn default_options(env: &Env) -> InvoiceOptions {
     InvoiceOptions {
-            co_creators: Vec::new(env),
-            allow_early_withdrawal: false,
-            bonus_pool: 0,
-            bonus_max_payers: 0,
-            prerequisite_id: None,
-            tranches: Vec::new(env),
-            co_signers: Vec::new(env),
-            required_signatures: 0,
-            penalty_bps: None,
-            penalty_deadline: None,
-            min_funding_bps: None,
-        }
+        co_creators: Vec::new(env),
+        allow_early_withdrawal: false,
+        bonus_pool: 0,
+        bonus_max_payers: 0,
+        prerequisite_id: None,
+        tranches: Vec::new(env),
+        co_signers: Vec::new(env),
+        required_signatures: 0,
+        penalty_bps: None,
+        penalty_deadline: None,
+        min_funding_bps: None,
+        stake_amount: 0,
+        referrer: None,
+        vesting_cliff: None,
     }
-    }
+}
 
 /// Create a basic single-recipient invoice with default optional params.
 fn make_invoice(
@@ -107,7 +109,7 @@ fn test_pay_and_auto_release() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 200, &token_id, 9_999);
-    c.pay(&payer, &id, &200_i128, &0_u64);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
 
     let invoice = c.get_invoice(&id);
     assert_eq!(invoice.status, InvoiceStatus::Released);
@@ -132,10 +134,10 @@ fn test_partial_pay_then_release() {
 
     let id = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 9_999);
 
-    c.pay(&payer1, &id, &150_i128, &0_u64);
+    c.pay(&payer1, &id, &150_i128, &0_u64, &false);
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Pending);
 
-    c.pay(&payer2, &id, &150_i128, &0_u64);
+    c.pay(&payer2, &id, &150_i128, &0_u64, &false);
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
     assert_eq!(tk.balance(&recipient), 300);
 }
@@ -154,7 +156,7 @@ fn test_refund_after_deadline() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 500, &token_id, 2_000);
-    c.pay(&payer, &id, &100_i128, &0_u64);
+    c.pay(&payer, &id, &100_i128, &0_u64, &false);
 
     env.ledger().set_timestamp(3_000);
     c.refund(&id);
@@ -178,7 +180,7 @@ fn test_pay_after_deadline_panics() {
 
     let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 2_000);
     env.ledger().set_timestamp(3_000);
-    c.pay(&payer, &id, &100_i128, &0_u64);
+    c.pay(&payer, &id, &100_i128, &0_u64, &false);
 }
 
 #[test]
@@ -195,7 +197,7 @@ fn test_overpayment_panics() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 9_999);
-    c.pay(&payer, &id, &200_i128, &0_u64);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
 }
 
 #[test]
@@ -225,7 +227,7 @@ fn test_multi_recipient_release() {
     let id = c.create_invoice(
         &creator, &recipients, &amounts, &token_id, &9_999_u64, &default_options(&env),
     );
-    c.pay(&payer, &id, &600_i128, &0_u64);
+    c.pay(&payer, &id, &600_i128, &0_u64, &false);
 
     assert_eq!(tk.balance(&r1), 100);
     assert_eq!(tk.balance(&r2), 200);
@@ -245,7 +247,7 @@ fn test_audit_log() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 200, &token_id, 9_999);
-    c.pay(&payer, &id, &200_i128, &0_u64);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
 
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
 
@@ -301,8 +303,8 @@ fn test_template_save_and_create_two_invoices() {
 
     assert_ne!(id1, id2);
 
-    c.pay(&payer, &id1, &100_i128, &0_u64);
-    c.pay(&payer, &id2, &100_i128, &0_u64);
+    c.pay(&payer, &id1, &100_i128, &0_u64, &false);
+    c.pay(&payer, &id2, &100_i128, &0_u64, &false);
 
     assert_eq!(c.get_invoice(&id1).status, InvoiceStatus::Released);
     assert_eq!(c.get_invoice(&id2).status, InvoiceStatus::Released);
@@ -356,7 +358,7 @@ fn test_cancel_with_refund() {
 
     let id = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 9_999);
 
-    c.pay(&payer, &id, &150_i128, &0_u64);
+    c.pay(&payer, &id, &150_i128, &0_u64, &false);
     assert_eq!(tk.balance(&payer), 150);
 
     c.cancel_invoice(&creator, &id);
@@ -381,7 +383,7 @@ fn test_cancel_non_pending_panics() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 9_999);
-    c.pay(&payer, &id, &100_i128, &0_u64);
+    c.pay(&payer, &id, &100_i128, &0_u64, &false);
     c.cancel_invoice(&creator, &id);
 }
 
@@ -404,10 +406,10 @@ fn test_get_payer_total() {
     assert_eq!(c.get_payer_total(&id, &payer), 0);
     assert_eq!(c.get_payer_total(&id, &other), 0);
 
-    c.pay(&payer, &id, &200_i128, &0_u64);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
     assert_eq!(c.get_payer_total(&id, &payer), 200);
 
-    c.pay(&payer, &id, &150_i128, &1_u64);
+    c.pay(&payer, &id, &150_i128, &1_u64, &false);
     assert_eq!(c.get_payer_total(&id, &payer), 350);
 }
 
@@ -510,7 +512,7 @@ fn test_add_recipient_after_payment_panics() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &r1, 100, &token_id, 9_999);
-    c.pay(&payer, &id, &50_i128, &0_u64);
+    c.pay(&payer, &id, &50_i128, &0_u64, &false);
     c.add_recipient(&creator, &id, &r2, &200_i128);
 }
 
@@ -548,7 +550,7 @@ fn test_add_recipient_then_full_payment() {
     c.add_recipient(&creator, &id, &r2, &200_i128);
 
     // Pay total (100 + 200 = 300).
-    c.pay(&payer, &id, &300_i128, &0_u64);
+    c.pay(&payer, &id, &300_i128, &0_u64, &false);
 
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
     assert_eq!(tk.balance(&r1), 100);
@@ -593,7 +595,7 @@ fn test_add_recipient_after_release_panics() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &r1, 200, &token_id, 9_999);
-    c.pay(&payer, &id, &200_i128, &0_u64);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
     // After auto-release the invoice is Released, not Pending.
     c.add_recipient(&creator, &id, &r2, &100_i128);
 }
@@ -623,7 +625,7 @@ fn test_create_subscription() {
     let id = c.create_subscription(&creator, &recipients, &amounts, &token_id, &3_u32);
     assert_eq!(id, 1);
 
-    c.pay(&payer, &id, &200_i128, &0_u64);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
 
     let second_invoice = c.get_invoice(&2);
@@ -654,7 +656,7 @@ fn test_pause_blocks_pay() {
     let id = make_invoice(&env, &c, &creator, &recipient, 200, &token_id, 9_999);
     c.pause(&admin);
 
-    c.pay(&payer, &id, &100_i128, &0_u64);
+    c.pay(&payer, &id, &100_i128, &0_u64, &false);
 }
 
 #[test]
@@ -677,7 +679,7 @@ fn test_unpause_restores_pay() {
     c.pause(&admin);
     c.unpause(&admin);
 
-    c.pay(&payer, &id, &200_i128, &0_u64);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
 }
 
@@ -787,11 +789,14 @@ fn test_bonus_pool_distributed_to_first_payer() {
             penalty_bps: None,
             penalty_deadline: None,
             min_funding_bps: None,
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
-    c.pay(&early_payer, &id, &150_i128, &0_u64);
-    c.pay(&late_payer, &id, &150_i128, &0_u64);
+    c.pay(&early_payer, &id, &150_i128, &0_u64, &false);
+    c.pay(&late_payer, &id, &150_i128, &0_u64, &false);
 
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
     assert_eq!(tk.balance(&early_payer), 50);
@@ -813,7 +818,7 @@ fn test_bonus_pool_zero_behaves_identically() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 200, &token_id, 9_999);
-    c.pay(&payer, &id, &200_i128, &0_u64);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
 
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
     assert_eq!(tk.balance(&recipient), 200);
@@ -847,7 +852,7 @@ fn test_group_partial_fund_blocks_release() {
     ids.push_back(id2);
     c.create_invoice_group(&ids);
 
-    c.pay(&payer, &id1, &100_i128, &0_u64);
+    c.pay(&payer, &id1, &100_i128, &0_u64, &false);
 
     c.release(&id1);
 }
@@ -876,8 +881,8 @@ fn test_group_all_funded_releases_both() {
     ids.push_back(id2);
     c.create_invoice_group(&ids);
 
-    c.pay(&payer, &id1, &100_i128, &0_u64);
-    c.pay(&payer, &id2, &200_i128, &0_u64);
+    c.pay(&payer, &id1, &100_i128, &0_u64, &false);
+    c.pay(&payer, &id2, &200_i128, &0_u64, &false);
 
     c.release(&id1);
 
@@ -903,7 +908,7 @@ fn test_non_grouped_invoice_unaffected() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 9_999);
-    c.pay(&payer, &id, &300_i128, &0_u64);
+    c.pay(&payer, &id, &300_i128, &0_u64, &false);
 
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
     assert_eq!(tk.balance(&recipient), 300);
@@ -929,13 +934,13 @@ fn test_nonce_increments_per_payer_per_invoice() {
 
     assert_eq!(c.get_nonce(&id, &payer), 0);
 
-    c.pay(&payer, &id, &200_i128, &0_u64);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
     assert_eq!(c.get_nonce(&id, &payer), 1);
 
-    c.pay(&payer, &id, &200_i128, &1_u64);
+    c.pay(&payer, &id, &200_i128, &1_u64, &false);
     assert_eq!(c.get_nonce(&id, &payer), 2);
 
-    c.pay(&payer, &id, &200_i128, &2_u64);
+    c.pay(&payer, &id, &200_i128, &2_u64, &false);
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
 }
 
@@ -954,10 +959,10 @@ fn test_wrong_nonce_panics() {
 
     let id = make_invoice(&env, &c, &creator, &recipient, 600, &token_id, 9_999);
 
-    c.pay(&payer, &id, &200_i128, &0_u64);
-    c.pay(&payer, &id, &200_i128, &1_u64);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
+    c.pay(&payer, &id, &200_i128, &1_u64, &false);
     // nonce should be 2 now — submitting 1 again must panic.
-    c.pay(&payer, &id, &200_i128, &1_u64);
+    c.pay(&payer, &id, &200_i128, &1_u64, &false);
 }
 
 #[test]
@@ -977,8 +982,8 @@ fn test_nonce_is_independent_per_invoice() {
     let id2 = make_invoice(&env, &c, &creator, &r2, 100, &token_id, 9_999);
 
     // Both invoices start at nonce 0 for the same payer.
-    c.pay(&payer, &id1, &100_i128, &0_u64);
-    c.pay(&payer, &id2, &100_i128, &0_u64);
+    c.pay(&payer, &id1, &100_i128, &0_u64, &false);
+    c.pay(&payer, &id2, &100_i128, &0_u64, &false);
 
     assert_eq!(c.get_nonce(&id1, &payer), 1);
     assert_eq!(c.get_nonce(&id2, &payer), 1);
@@ -1028,11 +1033,14 @@ fn test_release_blocked_by_prerequisite() {
             penalty_bps: None,
             penalty_deadline: None,
             min_funding_bps: None,
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
     // Fund B fully but don't touch A.
-    c.pay(&payer, &id_b, &200_i128, &0_u64);
+    c.pay(&payer, &id_b, &200_i128, &0_u64, &false);
 
     // release() on B should panic because A is still Pending.
     c.release(&id_b);
@@ -1076,15 +1084,18 @@ fn test_release_succeeds_after_prerequisite_released() {
             penalty_bps: None,
             penalty_deadline: None,
             min_funding_bps: None,
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
     // Release A (auto-releases on full funding).
-    c.pay(&payer, &id_a, &100_i128, &0_u64);
+    c.pay(&payer, &id_a, &100_i128, &0_u64, &false);
     assert_eq!(c.get_invoice(&id_a).status, InvoiceStatus::Released);
 
     // Fund B fully (stays pending because it has a prerequisite).
-    c.pay(&payer, &id_b, &200_i128, &0_u64);
+    c.pay(&payer, &id_b, &200_i128, &0_u64, &false);
     assert_eq!(c.get_invoice(&id_b).status, InvoiceStatus::Pending);
 
     // Now release B — prerequisite is satisfied.
@@ -1106,7 +1117,7 @@ fn test_no_prerequisite_behaves_like_normal() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 200, &token_id, 9_999);
-    c.pay(&payer, &id, &200_i128, &0_u64);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
 
     // Auto-releases because no prerequisite.
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
@@ -1157,11 +1168,14 @@ fn test_tranches_partial_then_full_release() {
             penalty_bps: None,
             penalty_deadline: None,
             min_funding_bps: None,
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
     // Fund fully — no auto-release for tranche invoices.
-    c.pay(&payer, &id, &1_000_i128, &0_u64);
+    c.pay(&payer, &id, &1_000_i128, &0_u64, &false);
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Pending);
 
     // At t=1_600 first tranche is unlocked, second is not.
@@ -1220,10 +1234,13 @@ fn test_release_before_any_tranche_unlocked_panics() {
             penalty_bps: None,
             penalty_deadline: None,
             min_funding_bps: None,
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
-    c.pay(&payer, &id, &500_i128, &0_u64);
+    c.pay(&payer, &id, &500_i128, &0_u64, &false);
     // t=1_000 < tranche timestamp 5_000 — should panic.
     c.release(&id);
 }
@@ -1259,13 +1276,13 @@ fn test_reputation_increments_across_invoices() {
 
     assert_eq!(c.get_reputation(&payer), 0);
 
-    c.pay(&payer, &id1, &100_i128, &0_u64);
+    c.pay(&payer, &id1, &100_i128, &0_u64, &false);
     assert_eq!(c.get_reputation(&payer), 1);
 
-    c.pay(&payer, &id2, &100_i128, &0_u64);
+    c.pay(&payer, &id2, &100_i128, &0_u64, &false);
     assert_eq!(c.get_reputation(&payer), 2);
 
-    c.pay(&payer, &id3, &100_i128, &0_u64);
+    c.pay(&payer, &id3, &100_i128, &0_u64, &false);
     assert_eq!(c.get_reputation(&payer), 3);
 }
 
@@ -1286,10 +1303,10 @@ fn test_reputation_is_per_address() {
 
     let id = make_invoice(&env, &c, &creator, &recipient, 400, &token_id, 9_999);
 
-    c.pay(&payer_a, &id, &100_i128, &0_u64);
-    c.pay(&payer_a, &id, &100_i128, &1_u64);
-    c.pay(&payer_b, &id, &100_i128, &0_u64);
-    c.pay(&payer_b, &id, &100_i128, &1_u64);
+    c.pay(&payer_a, &id, &100_i128, &0_u64, &false);
+    c.pay(&payer_a, &id, &100_i128, &1_u64, &false);
+    c.pay(&payer_b, &id, &100_i128, &0_u64, &false);
+    c.pay(&payer_b, &id, &100_i128, &1_u64, &false);
 
     // payer_a paid twice, payer_b paid twice.
     assert_eq!(c.get_reputation(&payer_a), 2);
@@ -1451,7 +1468,7 @@ fn test_rollover_invoice_creates_new_with_carried_payments() {
     let id1 = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 2_000);
 
     // Partially fund the invoice.
-    c.pay(&payer, &id1, &100_i128, &0_u64);
+    c.pay(&payer, &id1, &100_i128, &0_u64, &false);
     assert_eq!(c.get_invoice(&id1).funded, 100);
     assert_eq!(c.get_invoice(&id1).status, InvoiceStatus::Pending);
 
@@ -1500,13 +1517,13 @@ fn test_rollover_invoice_then_complete_payment() {
     env.ledger().set_timestamp(1_000);
 
     let id1 = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 2_000);
-    c.pay(&payer, &id1, &100_i128, &0_u64);
+    c.pay(&payer, &id1, &100_i128, &0_u64, &false);
 
     env.ledger().set_timestamp(3_000);
     let id2 = c.rollover_invoice(&creator, &id1, &5_000_u64);
 
     // Complete the payment on the new invoice.
-    c.pay(&payer, &id2, &200_i128, &0_u64);
+    c.pay(&payer, &id2, &200_i128, &0_u64, &false);
 
     // New invoice should be fully funded and released.
     assert_eq!(c.get_invoice(&id2).status, InvoiceStatus::Released);
@@ -1530,7 +1547,7 @@ fn test_rollover_invoice_non_pending_panics() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 9_999);
-    c.pay(&payer, &id, &100_i128, &0_u64);
+    c.pay(&payer, &id, &100_i128, &0_u64, &false);
 
     // Invoice is now Released, not Pending.
     env.ledger().set_timestamp(3_000);
@@ -1551,7 +1568,7 @@ fn test_rollover_invoice_before_deadline_panics() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 5_000);
-    c.pay(&payer, &id, &100_i128, &0_u64);
+    c.pay(&payer, &id, &100_i128, &0_u64, &false);
 
     // Still before deadline (3_000 < 5_000).
     env.ledger().set_timestamp(3_000);
@@ -1573,7 +1590,7 @@ fn test_rollover_invoice_non_creator_panics() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 2_000);
-    c.pay(&payer, &id, &100_i128, &0_u64);
+    c.pay(&payer, &id, &100_i128, &0_u64, &false);
 
     env.ledger().set_timestamp(3_000);
     c.rollover_invoice(&other, &id, &5_000_u64);
@@ -1593,7 +1610,7 @@ fn test_rollover_invoice_past_deadline_panics() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 2_000);
-    c.pay(&payer, &id, &100_i128, &0_u64);
+    c.pay(&payer, &id, &100_i128, &0_u64, &false);
 
     env.ledger().set_timestamp(3_000);
     // Try to set new deadline to 2_500, which is in the past.
@@ -1613,7 +1630,7 @@ fn test_rollover_invoice_audit_entries() {
     env.ledger().set_timestamp(1_000);
 
     let id1 = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 2_000);
-    c.pay(&payer, &id1, &100_i128, &0_u64);
+    c.pay(&payer, &id1, &100_i128, &0_u64, &false);
 
     env.ledger().set_timestamp(3_000);
     let id2 = c.rollover_invoice(&creator, &id1, &5_000_u64);
@@ -1658,7 +1675,7 @@ fn test_rollover_invoice_preserves_recipients_and_amounts() {
     let id1 = c.create_invoice(
         &creator, &recipients, &amounts, &token_id, &2_000_u64, &default_options(&env),
     );
-    c.pay(&payer, &id1, &150_i128, &0_u64);
+    c.pay(&payer, &id1, &150_i128, &0_u64, &false);
 
     env.ledger().set_timestamp(3_000);
     let id2 = c.rollover_invoice(&creator, &id1, &5_000_u64);
@@ -1821,7 +1838,7 @@ fn test_platform_fee_bps_deducted_on_release() {
     c.initialize(&admin, &0_i128, &treasury, &token_id, &1_000_u32); // 10%
 
     let id = make_invoice(&env, &c, &creator, &recipient, 500, &token_id, 9_999);
-    c.pay(&payer, &id, &500_i128, &0_u64);
+    c.pay(&payer, &id, &500_i128, &0_u64, &false);
 
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
     // Recipient gets 500 - 10% = 450.
@@ -1863,7 +1880,7 @@ fn test_platform_fee_bps_multi_recipient() {
     let id = c.create_invoice(
         &creator, &recipients, &amounts, &token_id, &9_999_u64, &default_options(&env),
     );
-    c.pay(&payer, &id, &1_000_i128, &0_u64);
+    c.pay(&payer, &id, &1_000_i128, &0_u64, &false);
 
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
     // 200 - 5% = 190, 300 - 5% = 285, 500 - 5% = 475 → sum = 950
@@ -1920,10 +1937,13 @@ fn test_platform_fee_bps_with_tranches() {
             penalty_bps: None,
             penalty_deadline: None,
             min_funding_bps: None,
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
-    c.pay(&payer, &id, &1_000_i128, &0_u64);
+    c.pay(&payer, &id, &1_000_i128, &0_u64, &false);
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Pending);
 
     // First tranche: 500 unlocked.
@@ -1985,11 +2005,14 @@ fn test_penalty_not_applied_before_penalty_deadline() {
             penalty_bps: Some(1_000), // 10 %
             penalty_deadline: Some(2_000),
             min_funding_bps: None,
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
     // Pay at t=1_000 which is before penalty_deadline.
-    c.pay(&payer, &id, &500_i128, &0_u64);
+    c.pay(&payer, &id, &500_i128, &0_u64, &false);
 
     // Recipient gets full 500, no penalty.
     assert_eq!(tk.balance(&recipient), 500);
@@ -2035,12 +2058,15 @@ fn test_penalty_applied_after_penalty_deadline() {
             penalty_bps: Some(1_000), // 10 %
             penalty_deadline: Some(2_000),
             min_funding_bps: None,
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
     // Advance past penalty deadline.
     env.ledger().set_timestamp(3_000);
-    c.pay(&payer, &id, &500_i128, &0_u64);
+    c.pay(&payer, &id, &500_i128, &0_u64, &false);
 
     // Recipient gets 500 (normal) + 50 (penalty) = 550.
     assert_eq!(tk.balance(&recipient), 550);
@@ -2092,12 +2118,15 @@ fn test_penalty_distributed_proportionally_multi_recipient() {
             penalty_bps: Some(1_000), // 10 %
             penalty_deadline: Some(2_000),
             min_funding_bps: None,
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
     // Pay after penalty deadline.
     env.ledger().set_timestamp(3_000);
-    c.pay(&payer, &id, &1_000_i128, &0_u64);
+    c.pay(&payer, &id, &1_000_i128, &0_u64, &false);
 
     // Penalty = 1000 * 10% = 100
     // Distribution: r1=10, r2=20, r3=70
@@ -2147,11 +2176,14 @@ fn test_penalty_bps_zero_no_penalty_even_after_deadline() {
             penalty_bps: Some(0),
             penalty_deadline: Some(2_000),
             min_funding_bps: None,
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
     env.ledger().set_timestamp(3_000);
-    c.pay(&payer, &id, &500_i128, &0_u64);
+    c.pay(&payer, &id, &500_i128, &0_u64, &false);
 
     // Recipient gets full 500, no penalty.
     assert_eq!(tk.balance(&recipient), 500);
@@ -2179,12 +2211,12 @@ fn test_min_funding_bps_zero_requires_full_funding() {
     let id = make_invoice(&env, &c, &creator, &recipient, 500, &token_id, 9_999);
 
     // Partial fund (300 of 500) — release should fail.
-    c.pay(&payer, &id, &300_i128, &0_u64);
+    c.pay(&payer, &id, &300_i128, &0_u64, &false);
     assert_eq!(c.get_invoice(&id).funded, 300);
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Pending);
 
     // Fund the rest.
-    c.pay(&payer, &id, &200_i128, &1_u64);
+    c.pay(&payer, &id, &200_i128, &1_u64, &false);
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
 }
 
@@ -2225,11 +2257,14 @@ fn test_min_funding_bps_blocks_early_release() {
             penalty_bps: None,
             penalty_deadline: None,
             min_funding_bps: Some(8_000), // 80 %
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
     // Fund 500 of 1000 (50% — below 80% threshold). Release should panic.
-    c.pay(&payer, &id, &500_i128, &0_u64);
+    c.pay(&payer, &id, &500_i128, &0_u64, &false);
     assert_eq!(c.get_invoice(&id).funded, 500);
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Pending);
 }
@@ -2272,11 +2307,14 @@ fn test_min_funding_bps_panics_below_threshold() {
             penalty_bps: None,
             penalty_deadline: None,
             min_funding_bps: Some(8_000), // 80 %
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
     // Fund 700 of 1000 (70% — below 80%). Try to release — must panic.
-    c.pay(&payer, &id, &700_i128, &0_u64);
+    c.pay(&payer, &id, &700_i128, &0_u64, &false);
     // Guarded (has min_funding_bps), so auto-release won't fire.
     c.release(&id);
 }
@@ -2319,14 +2357,131 @@ fn test_min_funding_bps_allows_release_above_threshold() {
             penalty_bps: None,
             penalty_deadline: None,
             min_funding_bps: Some(8_000), // 80 %
+            stake_amount: 0,
+            referrer: None,
+            vesting_cliff: None,
         },
     );
 
     // Fund 900 of 1000 (90% >= 80%). Release should succeed.
-    c.pay(&payer, &id, &900_i128, &0_u64);
+    c.pay(&payer, &id, &900_i128, &0_u64, &false);
     // Guarded (has min_funding_bps), so we must manually release.
     c.release(&id);
 
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
     assert_eq!(tk.balance(&recipient), 900);
 }
+
+// ---------------------------------------------------------------------------
+// Vesting cliff tests (issue #27)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_vesting_cliff_no_cliff_releases_immediately() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let tk = token_client(&env, &token_id);
+
+    let creator = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    StellarAssetClient::new(&env, &token_id).mint(&payer, &500);
+    env.ledger().set_timestamp(1_000);
+
+    let id = make_invoice(&env, &c, &creator, &recipient, 200, &token_id, 9_999);
+    c.pay(&payer, &id, &200_i128, &0_u64, &false);
+
+    // Without vesting_cliff, funds transfer immediately on full payment (auto-release)
+    let invoice = c.get_invoice(&id);
+    assert_eq!(invoice.status, InvoiceStatus::Released);
+    assert_eq!(tk.balance(&recipient), 200);
+    // All vesting_cliff_claimed entries should be false (but not used since no cliff)
+    assert_eq!(invoice.vesting_cliff_claimed.len(), 1u32);
+}
+
+#[test]
+fn test_vesting_cliff_with_cliff_holds_funds_on_release() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let tk = token_client(&env, &token_id);
+
+    let creator = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    StellarAssetClient::new(&env, &token_id).mint(&payer, &500);
+    env.ledger().set_timestamp(1_000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient.clone());
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(300);
+
+    let mut options = default_options(&env);
+    options.vesting_cliff = Some(5_000); // Cliff at timestamp 5000
+    // Add a co-signer to prevent auto-release; we won't actually require the signature
+    let mut co_signers = Vec::new(&env);
+    co_signers.push_back(creator.clone());
+    options.co_signers = co_signers;
+    options.required_signatures = 1;
+
+    let id = c.create_invoice(&creator, &recipients, &amounts, &token_id, &3_000, &options);
+
+    // Pay full amount (won't auto-release because of co-signer guard)
+    c.pay(&payer, &id, &300_i128, &0_u64, &false);
+    // Sign and release to test vesting cliff behavior
+    c.sign_release(&id, &creator);
+    c.release(&id);
+
+    let invoice = c.get_invoice(&id);
+    // Should be Released but funds not transferred yet
+    assert_eq!(invoice.status, InvoiceStatus::Released);
+    assert_eq!(tk.balance(&recipient), 0);
+    // Vesting cliff claimed should be false
+    assert_eq!(invoice.vesting_cliff_claimed.get(0), Some(false));
+}
+
+#[test]
+fn test_vesting_cliff_claim_after_cliff_transfers() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let tk = token_client(&env, &token_id);
+
+    let creator = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    StellarAssetClient::new(&env, &token_id).mint(&payer, &500);
+    env.ledger().set_timestamp(1_000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient.clone());
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(300);
+
+    let mut options = default_options(&env);
+    options.vesting_cliff = Some(5_000); // Cliff at timestamp 5000
+    // Add a co-signer to prevent auto-release
+    let mut co_signers = Vec::new(&env);
+    co_signers.push_back(creator.clone());
+    options.co_signers = co_signers;
+    options.required_signatures = 1;
+
+    let id = c.create_invoice(&creator, &recipients, &amounts, &token_id, &3_000, &options);
+    c.pay(&payer, &id, &300_i128, &0_u64, &false);
+    // Sign the release first
+    c.sign_release(&id, &creator);
+    c.release(&id);
+
+    // Move time past cliff
+    env.ledger().set_timestamp(6_000);
+
+    // Now claim should succeed and transfer funds
+    c.claim(&id, &recipient);
+    assert_eq!(tk.balance(&recipient), 300); // Full funded amount is distributed
+
+    let invoice = c.get_invoice(&id);
+    assert_eq!(invoice.vesting_cliff_claimed.get(0), Some(true));
+}
+

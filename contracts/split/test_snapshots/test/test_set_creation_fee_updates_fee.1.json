@@ -224,6 +224,14 @@
                       },
                       {
                         "key": {
+                          "symbol": "plat_fee"
+                        },
+                        "val": {
+                          "u32": 0
+                        }
+                      },
+                      {
+                        "key": {
                           "symbol": "treasury"
                         },
                         "val": {

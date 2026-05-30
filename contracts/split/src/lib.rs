@@ -86,6 +86,10 @@ fn recipient_invoice_ids_key(recipient: &Address) -> (Symbol, Address) {
     (symbol_short!("rec_inv"), recipient.clone())
 }
 
+fn referral_count_key(referrer: &Address) -> (Symbol, Address) {
+    (symbol_short!("ref_count"), referrer.clone())
+}
+
 // ---------------------------------------------------------------------------
 // Invoice storage helpers
 // ---------------------------------------------------------------------------
@@ -343,6 +347,9 @@ impl SplitContract {
             options.penalty_bps.unwrap_or(0),
             options.penalty_deadline.unwrap_or(0),
             options.min_funding_bps.unwrap_or(0),
+            options.stake_amount,
+            options.referrer,
+            options.vesting_cliff,
         )
     }
 
@@ -365,6 +372,9 @@ impl SplitContract {
         penalty_bps: u32,
         penalty_deadline: u64,
         min_funding_bps: u32,
+        stake_amount: i128,
+        referrer: Option<Address>,
+        vesting_cliff: Option<u64>,
     ) -> u64 {
         assert!(
             recipients.len() == amounts.len(),
@@ -448,6 +458,12 @@ impl SplitContract {
             claimed.push_back(0i128);
         }
 
+        // Issue #27: Initialize vesting cliff claimed tracking (all false).
+        let mut vesting_cliff_claimed: Vec<bool> = Vec::new(env);
+        for _ in recipients.iter() {
+            vesting_cliff_claimed.push_back(false);
+        }
+
         // Issue #87: Increment referral count if referrer is provided.
         if let Some(ref referrer_addr) = referrer {
             let count: u64 = env
@@ -490,6 +506,10 @@ impl SplitContract {
             penalty_bps,
             penalty_deadline,
             min_funding_bps,
+            stake_amount,
+            referrer,
+            vesting_cliff,
+            vesting_cliff_claimed,
         };
 
         save_invoice(env, id, &invoice);
@@ -538,6 +558,10 @@ impl SplitContract {
                 0,
                 0,
                 0,
+                0,
+                0,
+                None,
+                None,
             );
             ids.push_back(id);
         }
@@ -584,6 +608,9 @@ impl SplitContract {
             0,
             0,
             0,
+            0,
+            None,
+            None,
         );
 
         if months > 1 {
@@ -857,6 +884,80 @@ impl SplitContract {
         append_audit_entry(&env, invoice_id, symbol_short!("aprv"), approver);
     }
 
+    /// Claim vesting cliff share after cliff timestamp has passed (issue #27).
+    ///
+    /// Requires that the invoice status is Released and the cliff (if set) has passed.
+    /// Each recipient can claim exactly once.
+    pub fn claim(env: Env, invoice_id: u64, recipient: Address) {
+        require_not_paused(&env);
+        recipient.require_auth();
+
+        let mut invoice = load_invoice(&env, invoice_id);
+
+        assert!(
+            invoice.status == InvoiceStatus::Released,
+            "invoice not released"
+        );
+
+        // Find recipient index
+        let idx = invoice
+            .recipients
+            .iter()
+            .position(|r| r == recipient)
+            .expect("recipient not in invoice") as u32;
+
+        // Check if already claimed
+        assert!(
+            !invoice.vesting_cliff_claimed.get(idx).unwrap(),
+            "recipient already claimed"
+        );
+
+        // Check cliff timestamp if set
+        if let Some(cliff) = invoice.vesting_cliff {
+            let now = env.ledger().timestamp();
+            assert!(now >= cliff, "cliff not reached");
+        }
+
+        // Mark as claimed
+        invoice.vesting_cliff_claimed.set(idx, true);
+        save_invoice(&env, invoice_id, &invoice);
+
+        // Transfer recipient's share
+        let amount = invoice.amounts.get(idx).unwrap();
+        let total: i128 = invoice.amounts.iter().sum();
+        let funded = invoice.funded;
+        let n = invoice.recipients.len() as u32;
+
+        let proportional = if idx == n - 1 {
+            // Last recipient gets remainder
+            funded - {
+                let mut sum = 0i128;
+                for i in 0..idx {
+                    let amt = invoice.amounts.get(i).unwrap();
+                    let prop = (amt as u128 * funded as u128 / total as u128) as i128;
+                    sum += prop;
+                }
+                sum
+            }
+        } else {
+            (amount as u128 * funded as u128 / total as u128) as i128
+        };
+
+        let platform_fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&platform_fee_bps_key())
+            .unwrap_or(0u32);
+
+        let fee = (proportional as u128 * platform_fee_bps as u128 / 10_000u128) as i128;
+        let payout = proportional - fee;
+
+        let token_client = token::Client::new(&env, &invoice.tokens.get(idx).expect("no token"));
+        token_client.transfer(&env.current_contract_address(), &recipient, &payout);
+
+        append_audit_entry(&env, invoice_id, symbol_short!("claim"), &recipient);
+    }
+
     /// Distribute tranches unlocked by the current ledger time (issue #23).
     fn _release_tranches(env: &Env, invoice_id: u64, invoice: &mut Invoice, actor: &Address) {
         let now = env.ledger().timestamp();
@@ -927,6 +1028,16 @@ impl SplitContract {
     /// Full immediate release (no tranches).
     /// Issue #89: Returns stake to creator on successful release.
     fn _release_full(env: &Env, invoice_id: u64, invoice: &mut Invoice, actor: &Address) {
+        // Issue #27: If vesting cliff is set, just mark as Released without transferring funds
+        if invoice.vesting_cliff.is_some() {
+            invoice.status = InvoiceStatus::Released;
+            invoice.completion_time = Some(env.ledger().timestamp());
+            save_invoice(env, invoice_id, invoice);
+            append_audit_entry(env, invoice_id, symbol_short!("release"), actor);
+            events::invoice_released(env, invoice_id, &invoice.recipients);
+            return;
+        }
+
         let token_client =
             token::Client::new(env, &invoice.tokens.get(0).expect("no token"));
 
@@ -1029,7 +1140,7 @@ impl SplitContract {
                         for (j, (recipient, amount)) in
                             member.recipients.iter().zip(member.amounts.iter()).enumerate()
                         {
-                            let proportional = if j == member_n - 1 {
+                            let proportional = if (j as u32) == member_n - 1 {
                                 member_funded - member_distributed
                             } else {
                                 (amount as u128 * member_funded as u128 / member_total as u128) as i128
@@ -1098,6 +1209,9 @@ impl SplitContract {
                 0,
                 0,
                 0,
+                0,
+                None,
+                None,
             );
             env.storage()
                 .persistent()
@@ -1338,6 +1452,9 @@ impl SplitContract {
             old_invoice.penalty_bps,
             old_invoice.penalty_deadline,
             old_invoice.min_funding_bps,
+            0, // No stake amount on rollover
+            None, // No referrer on rollover
+            None, // No vesting cliff on rollover
         );
 
         // Load the newly created invoice and copy over the payments.
@@ -1465,6 +1582,9 @@ impl SplitContract {
             0,
             0,
             0,
+            0,
+            None,
+            None,
         )
     }
 
