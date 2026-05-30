@@ -46,6 +46,15 @@ pub struct CompletionProof {
 
 #[contracttype]
 #[derive(Clone, Debug)]
+pub struct PaymentProof {
+    pub invoice_id: u64,
+    pub payer: Address,
+    pub total_paid: i128,
+    pub proof_hash: BytesN<32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct InvoiceTemplate {
     pub recipients: Vec<Address>,
     pub amounts: Vec<i128>,

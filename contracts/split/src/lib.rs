@@ -13,7 +13,7 @@ use soroban_sdk::{
 };
 use types::{
     AuditEntry, CompletionProof, CreateInvoiceParams, Invoice, InvoiceOptions, InvoiceStatus,
-    InvoiceTemplate, LegacyInvoice, Payment, SubscriptionParams, Tranche,
+    InvoiceTemplate, LegacyInvoice, Payment, PaymentProof, SubscriptionParams, Tranche,
 };
 
 // ---------------------------------------------------------------------------
@@ -1725,6 +1725,31 @@ impl SplitContract {
             timestamp: env.ledger().timestamp(),
             hash: hash.into(),
         }
+    }
+
+    /// Generate a payment proof for a specific payer on an invoice (issue #85).
+    /// No auth required — read-only. Returns total_paid = 0 if the payer has
+    /// not contributed. The proof_hash is deterministic over
+    /// (invoice_id, payer, total_paid).
+    pub fn generate_payment_proof(env: Env, invoice_id: u64, payer: Address) -> PaymentProof {
+        let invoice = load_invoice(&env, invoice_id);
+
+        let total_paid: i128 = invoice
+            .payments
+            .iter()
+            .filter(|p| p.payer == payer)
+            .map(|p| p.amount + p.tip)
+            .sum();
+
+        // Preimage: 8 bytes invoice_id || 16 bytes total_paid (big-endian i128)
+        let mut preimage = [0u8; 24];
+        preimage[..8].copy_from_slice(&invoice_id.to_be_bytes());
+        preimage[8..24].copy_from_slice(&total_paid.to_be_bytes());
+
+        let bytes = Bytes::from_array(&env, &preimage);
+        let proof_hash: BytesN<32> = env.crypto().sha256(&bytes).into();
+
+        PaymentProof { invoice_id, payer, total_paid, proof_hash }
     }
 
     /// Return all invoice IDs that include `recipient` as a recipient (issue #40).

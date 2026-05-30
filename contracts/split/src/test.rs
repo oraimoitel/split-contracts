@@ -2330,3 +2330,63 @@ fn test_min_funding_bps_allows_release_above_threshold() {
     assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
     assert_eq!(tk.balance(&recipient), 900);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #85: generate_payment_proof
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_payment_proof_multiple_payments() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+
+    let creator = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    StellarAssetClient::new(&env, &token_id).mint(&payer, &1_000);
+
+    let id = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 9_999_999);
+    c.pay(&payer, &id, &100_i128, &0_u64);
+    c.pay(&payer, &id, &150_i128, &1_u64);
+
+    let proof = c.generate_payment_proof(&id, &payer);
+    assert_eq!(proof.invoice_id, id);
+    assert_eq!(proof.payer, payer);
+    assert_eq!(proof.total_paid, 250);
+}
+
+#[test]
+fn test_payment_proof_no_payment() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let id = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 9_999_999);
+
+    let proof = c.generate_payment_proof(&id, &stranger);
+    assert_eq!(proof.total_paid, 0);
+}
+
+#[test]
+fn test_payment_proof_hash_deterministic() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+
+    let creator = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    StellarAssetClient::new(&env, &token_id).mint(&payer, &500);
+
+    let id = make_invoice(&env, &c, &creator, &recipient, 200, &token_id, 9_999_999);
+    c.pay(&payer, &id, &200_i128, &0_u64);
+
+    let proof1 = c.generate_payment_proof(&id, &payer);
+    let proof2 = c.generate_payment_proof(&id, &payer);
+    assert_eq!(proof1.proof_hash, proof2.proof_hash);
+    assert_eq!(proof1.total_paid, proof2.total_paid);
+}
