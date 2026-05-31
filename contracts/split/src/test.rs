@@ -2762,3 +2762,106 @@ fn test_create_invoice_invalid_release_stages_panics() {
 
     c.create_invoice(&creator, &recipients, &amounts, &token_id, &9_999_u64, &opts);
 }
+
+// ---------------------------------------------------------------------------
+// Deadline extension (issue #29)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_extend_deadline_creator_succeeds() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+
+    let creator = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+
+    let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 5_000);
+    let invoice_before = c.get_invoice(&id);
+    assert_eq!(invoice_before.deadline, 5_000);
+
+    c.extend_deadline(&id, &9_999_u64);
+
+    let invoice_after = c.get_invoice(&id);
+    assert_eq!(invoice_after.deadline, 9_999);
+    assert_eq!(invoice_after.status, InvoiceStatus::Pending);
+}
+
+#[test]
+#[should_panic(expected = "invoice not pending")]
+fn test_extend_deadline_non_pending_panics() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+
+    let creator = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    StellarAssetClient::new(&env, &token_id).mint(&payer, &100);
+    env.ledger().set_timestamp(1_000);
+
+    let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 5_000);
+    c.pay(&payer, &id, &100_i128, &0_u64, &false);
+
+    assert_eq!(c.get_invoice(&id).status, InvoiceStatus::Released);
+    c.extend_deadline(&id, &9_999_u64);
+}
+
+#[test]
+#[should_panic(expected = "new deadline must be after current deadline")]
+fn test_extend_deadline_equal_to_current_panics() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+
+    let creator = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+
+    let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 5_000);
+    c.extend_deadline(&id, &5_000_u64);
+}
+
+#[test]
+#[should_panic(expected = "new deadline must be after current deadline")]
+fn test_extend_deadline_less_than_current_panics() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+
+    let creator = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+
+    let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 5_000);
+    c.extend_deadline(&id, &4_000_u64);
+}
+
+#[test]
+fn test_extend_deadline_then_pay_succeeds() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let tk = token_client(&env, &token_id);
+
+    let creator = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    StellarAssetClient::new(&env, &token_id).mint(&payer, &100);
+    env.ledger().set_timestamp(1_000);
+
+    let original_deadline = 3_000;
+    let new_deadline = 9_999;
+    let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, original_deadline);
+
+    c.extend_deadline(&id, &new_deadline);
+
+    env.ledger().set_timestamp(5_000);
+
+    c.pay(&payer, &id, &100_i128, &0_u64, &false);
+
+    let invoice = c.get_invoice(&id);
+    assert_eq!(invoice.status, InvoiceStatus::Released);
+    assert_eq!(tk.balance(&recipient), 100);
+}
