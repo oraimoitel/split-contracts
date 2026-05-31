@@ -31,3 +31,12 @@ identity/
 
 # Logs
 *.log
+
+# Coverage reports
+lcov.info
+tarpaulin-report.html
+coverage/
+
+# Temporary files
+*.tmp
+*.bak

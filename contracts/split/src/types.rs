@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Bytes, BytesN, Symbol, Vec};
+use soroban_sdk::{contracttype, Address, Symbol, Vec};
 
 /// Status of an invoice lifecycle.
 #[contracttype]
@@ -22,8 +22,6 @@ pub struct Payment {
     pub payer: Address,
     /// Amount paid in stroops (7 decimal places).
     pub amount: i128,
-    /// Optional tip in stroops (0 = no tip).
-    pub tip: i128,
 }
 
 /// An audit log entry recording a state change.
@@ -38,62 +36,18 @@ pub struct AuditEntry {
     pub timestamp: u64,
 }
 
-/// Parameters for creating a subscription invoice chain.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionParams {
-    /// Address that created the subscription.
-    pub creator: Address,
-    /// Ordered list of recipient addresses.
-    pub recipients: Vec<Address>,
-    /// Amounts owed to each recipient (parallel to `recipients`).
-    pub amounts: Vec<i128>,
-    /// Token contract addresses per recipient (parallel to `recipients`).
-    pub tokens: Vec<Address>,
-}
-
-/// A completion proof for a finalized invoice.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CompletionProof {
-    /// The invoice ID.
-    pub id: u64,
-    /// Final status (Released or Refunded).
-    pub status: InvoiceStatus,
-    /// Total funded amount in stroops.
-    pub funded: i128,
-    /// Timestamp when the invoice was finalized.
-    pub timestamp: u64,
-    /// SHA-256 hash of the invoice data for verification.
-    pub hash: BytesN<32>,
-}
-
-/// A reusable invoice template storing recipients, amounts, and token.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct InvoiceTemplate {
-    /// Ordered list of recipient addresses.
-    pub recipients: Vec<Address>,
-    /// Amounts owed to each recipient (parallel to `recipients`).
-    pub amounts: Vec<i128>,
-    /// USDC token contract address.
-    pub token: Address,
-}
-
 /// An on-chain invoice splitting payment among multiple recipients.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct Invoice {
     /// Address that created the invoice.
     pub creator: Address,
-    /// Optional co-creators who share creator-gated permissions.
-    pub co_creators: Vec<Address>,
     /// Ordered list of recipient addresses.
     pub recipients: Vec<Address>,
     /// Amounts owed to each recipient (parallel to `recipients`).
     pub amounts: Vec<i128>,
-    /// Token contract addresses per recipient (parallel to `recipients`).
-    pub tokens: Vec<Address>,
+    /// Token contract address used for payment.
+    pub token: Address,
     /// Unix timestamp after which unfunded invoices can be refunded.
     pub deadline: u64,
     /// Total amount collected so far.
@@ -102,10 +56,22 @@ pub struct Invoice {
     pub status: InvoiceStatus,
     /// All payments made toward this invoice.
     pub payments: Vec<Payment>,
-    /// Optional vesting duration in seconds. When set, recipients claim gradually.
-    pub drip_duration: Option<u64>,
-    /// Timestamp when the invoice was released (set by `_release` when drip is active).
-    pub release_timestamp: Option<u64>,
-    /// Amount already claimed by each recipient (parallel to `recipients`).
-    pub claimed: Vec<i128>,
+    /// Optional whitelist of addresses allowed to pay this invoice.
+    /// When None, any address may pay.
+    pub allowed_payers: Option<Vec<Address>>,
+}
+
+/// V1 schema of Invoice — used for storage migration.
+/// Matches the Invoice struct before `allowed_payers` was added.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct InvoiceV1 {
+    pub creator: Address,
+    pub recipients: Vec<Address>,
+    pub amounts: Vec<i128>,
+    pub token: Address,
+    pub deadline: u64,
+    pub funded: i128,
+    pub status: InvoiceStatus,
+    pub payments: Vec<Payment>,
 }

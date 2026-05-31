@@ -1,10 +1,10 @@
-use soroban_sdk::{symbol_short, Address, Bytes, Env, Vec};
+use soroban_sdk::{symbol_short, Address, Env, Vec};
 
 /// Emitted when a new invoice is created.
-pub fn invoice_created(env: &Env, invoice_id: u64, creator: &Address, total: i128, metadata: &Option<Bytes>) {
+pub fn invoice_created(env: &Env, invoice_id: u64, creator: &Address, total: i128) {
     env.events().publish(
         (symbol_short!("inv_crt"), invoice_id),
-        (creator.clone(), total, metadata.clone()),
+        (creator.clone(), total),
     );
 }
 
@@ -30,7 +30,7 @@ pub fn invoice_refunded(env: &Env, invoice_id: u64) {
         .publish((symbol_short!("inv_ref"), invoice_id), ());
 }
 
-/// Emitted once per unique payer when their refund is transferred.
+/// Emitted once per payer when their refund is transferred.
 pub fn payer_refunded(env: &Env, invoice_id: u64, payer: &Address, amount: i128) {
     env.events().publish(
         (symbol_short!("pay_ref"), invoice_id),
