@@ -156,9 +156,35 @@
                     },
                     {
                       "key": {
+                        "symbol": "min_funding_bps"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "penalty_bps"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "penalty_deadline"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
                         "symbol": "prerequisite_id"
                       },
                       "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "release_stages"
+                      },
+                      "val": {
+                        "vec": []
+                      }
                     },
                     {
                       "key": {
@@ -209,6 +235,9 @@
                 },
                 {
                   "u64": 0
+                },
+                {
+                  "bool": false
                 }
               ]
             }
@@ -265,6 +294,9 @@
                 },
                 {
                   "u64": 1
+                },
+                {
+                  "bool": false
                 }
               ]
             }
@@ -321,6 +353,9 @@
                 },
                 {
                   "u64": 2
+                },
+                {
+                  "bool": false
                 }
               ]
             }
@@ -677,6 +712,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "min_funding_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "payments"
                       },
                       "val": {
@@ -788,6 +831,22 @@
                     },
                     {
                       "key": {
+                        "symbol": "penalty_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "penalty_deadline"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "prerequisite_id"
                       },
                       "val": "void"
@@ -806,6 +865,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "release_stages"
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "release_timestamp"
                       },
                       "val": "void"
@@ -813,6 +880,14 @@
                     {
                       "key": {
                         "symbol": "released_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "released_stages"
                       },
                       "val": {
                         "u32": 0
@@ -1084,6 +1159,55 @@
                 "durability": "persistent",
                 "val": {
                   "u64": 3
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          4095
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "rec_inv"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "rec_inv"
+                    },
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "vec": [
+                    {
+                      "u64": 1
+                    }
+                  ]
                 }
               }
             },

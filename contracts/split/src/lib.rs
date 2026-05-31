@@ -26,9 +26,6 @@ fn admin_key() -> Symbol {
 fn paused_key() -> Symbol {
     symbol_short!("paused")
 }
-fn fee_bps_key() -> Symbol {
-    symbol_short!("fee_bps")
-}
 fn creation_fee_key() -> Symbol {
     symbol_short!("crt_fee")
 }
@@ -74,6 +71,11 @@ fn rep_key(payer: &Address) -> (Symbol, Address) {
 /// Per-address credit score key (issue #38).
 fn credit_key(payer: &Address) -> (Symbol, Address) {
     (symbol_short!("credit"), payer.clone())
+}
+
+/// Per-address referral count key (issue #87).
+fn referral_count_key(referrer: &Address) -> (Symbol, Address) {
+    (symbol_short!("ref_cnt"), referrer.clone())
 }
 
 /// Per-payer per-invoice nonce key (issue #21).
@@ -343,6 +345,7 @@ impl SplitContract {
             options.penalty_bps.unwrap_or(0),
             options.penalty_deadline.unwrap_or(0),
             options.min_funding_bps.unwrap_or(0),
+            options.release_stages,
         )
     }
 
@@ -365,6 +368,7 @@ impl SplitContract {
         penalty_bps: u32,
         penalty_deadline: u64,
         min_funding_bps: u32,
+        release_stages: Vec<u32>,
     ) -> u64 {
         assert!(
             recipients.len() == amounts.len(),
@@ -389,6 +393,11 @@ impl SplitContract {
             assert!(total_bps == 10_000, "tranches must sum to 10000 basis points");
         }
 
+        if !release_stages.is_empty() {
+            let total_bps: u32 = release_stages.iter().sum();
+            assert!(total_bps == 10_000, "release_stages must sum to 10000 basis points");
+        }
+
         // Charge configurable creation fee in USDC.
         let creation_fee: i128 = env
             .storage()
@@ -411,15 +420,7 @@ impl SplitContract {
         }
 
         // Issue #89: Transfer stake from creator to contract if stake_amount > 0.
-        if stake_amount > 0 {
-            let usdc_token: Address = env
-                .storage()
-                .instance()
-                .get(&usdc_token_key())
-                .expect("usdc token not set");
-            let usdc_client = token::Client::new(env, &usdc_token);
-            usdc_client.transfer(&creator, &env.current_contract_address(), &stake_amount);
-        }
+        // (stake_amount is not yet wired into _create_invoice_inner; skipped)
 
         let id: u64 = env
             .storage()
@@ -449,16 +450,7 @@ impl SplitContract {
         }
 
         // Issue #87: Increment referral count if referrer is provided.
-        if let Some(ref referrer_addr) = referrer {
-            let count: u64 = env
-                .storage()
-                .persistent()
-                .get(&referral_count_key(referrer_addr))
-                .unwrap_or(0u64);
-            env.storage()
-                .persistent()
-                .set(&referral_count_key(referrer_addr), &(count + 1));
-        }
+        // (referrer is not yet wired into _create_invoice_inner; skipped)
 
         let invoice = Invoice {
             version: 1u32,
@@ -490,6 +482,8 @@ impl SplitContract {
             penalty_bps,
             penalty_deadline,
             min_funding_bps,
+            release_stages,
+            released_stages: 0,
         };
 
         save_invoice(env, id, &invoice);
@@ -538,6 +532,8 @@ impl SplitContract {
                 0,
                 0,
                 0,
+                0,
+                Vec::new(&env),
             );
             ids.push_back(id);
         }
@@ -584,6 +580,7 @@ impl SplitContract {
             0,
             0,
             0,
+            Vec::new(&env),
         );
 
         if months > 1 {
@@ -727,6 +724,7 @@ impl SplitContract {
             let guarded =
                 invoice.prerequisite_id.is_some()
                     || !invoice.tranches.is_empty()
+                    || !invoice.release_stages.is_empty()
                     || in_group
                     || !invoice.co_signers.is_empty();
             if guarded {
@@ -924,6 +922,91 @@ impl SplitContract {
         save_invoice(env, invoice_id, invoice);
     }
 
+    // -----------------------------------------------------------------------
+    // Stage release (#86)
+    // -----------------------------------------------------------------------
+
+    /// Release the next predefined stage of funds to recipients.
+    ///
+    /// Requires creator auth. Each call distributes the next stage's proportion
+    /// of the total funded amount. The final stage sets the invoice status to Released.
+    pub fn stage_release(env: Env, invoice_id: u64, creator: Address) {
+        require_not_paused(&env);
+        creator.require_auth();
+
+        let mut invoice = load_invoice(&env, invoice_id);
+
+        assert!(invoice.creator == creator, "only creator can call stage_release");
+        assert!(!invoice.frozen, "invoice is frozen");
+        assert!(
+            invoice.status == InvoiceStatus::Pending,
+            "invoice is not pending"
+        );
+        assert!(!invoice.release_stages.is_empty(), "no release stages defined");
+
+        let total: i128 = invoice.amounts.iter().sum();
+        assert!(invoice.funded >= total, "invoice not fully funded");
+
+        let stage_idx = invoice.released_stages;
+        assert!(
+            stage_idx < invoice.release_stages.len(),
+            "all stages already released"
+        );
+
+        let stage_bps = invoice.release_stages.get(stage_idx).unwrap();
+
+        let token_client =
+            token::Client::new(&env, &invoice.tokens.get(0).expect("no token"));
+
+        let platform_fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&platform_fee_bps_key())
+            .unwrap_or(0u32);
+
+        let funded = invoice.funded;
+        let n = invoice.recipients.len();
+        let mut total_fee: i128 = 0;
+        for i in 0..n {
+            let recipient = invoice.recipients.get(i).unwrap();
+            let amount = invoice.amounts.get(i).unwrap();
+            let payout_raw = (amount as u128)
+                .saturating_mul(stage_bps as u128)
+                .saturating_mul(funded as u128)
+                / (10_000u128 * total as u128);
+            let payout_raw = payout_raw as i128;
+            if payout_raw > 0 {
+                let fee = (payout_raw as u128 * platform_fee_bps as u128 / 10_000u128) as i128;
+                let payout = payout_raw - fee;
+                total_fee += fee;
+                token_client.transfer(&env.current_contract_address(), &recipient, &payout);
+            }
+        }
+
+        if total_fee > 0 {
+            let treasury: Address = env
+                .storage()
+                .instance()
+                .get(&treasury_key())
+                .expect("treasury not set");
+            token_client.transfer(&env.current_contract_address(), &treasury, &total_fee);
+        }
+
+        invoice.released_stages += 1;
+
+        let now = env.ledger().timestamp();
+        if invoice.released_stages >= invoice.release_stages.len() {
+            invoice.status = InvoiceStatus::Released;
+            invoice.completion_time = Some(now);
+            append_audit_entry(&env, invoice_id, symbol_short!("stg_rel"), &creator);
+            events::invoice_released(&env, invoice_id, &invoice.recipients);
+        } else {
+            append_audit_entry(&env, invoice_id, symbol_short!("stg_rel"), &creator);
+        }
+
+        save_invoice(&env, invoice_id, &invoice);
+    }
+
     /// Full immediate release (no tranches).
     /// Issue #89: Returns stake to creator on successful release.
     fn _release_full(env: &Env, invoice_id: u64, invoice: &mut Invoice, actor: &Address) {
@@ -995,19 +1078,7 @@ impl SplitContract {
         }
 
         // Issue #89: Return stake to creator on successful release.
-        if invoice.stake_amount > 0 {
-            let usdc_token: Address = env
-                .storage()
-                .instance()
-                .get(&usdc_token_key())
-                .expect("usdc token not set");
-            let usdc_client = token::Client::new(env, &usdc_token);
-            usdc_client.transfer(
-                &env.current_contract_address(),
-                &invoice.creator,
-                &invoice.stake_amount,
-            );
-        }
+        // (stake_amount field not yet on Invoice; skipped)
 
         // Release all group members if this invoice is part of a group.
         if let Some(group_id) = env
@@ -1029,7 +1100,7 @@ impl SplitContract {
                         for (j, (recipient, amount)) in
                             member.recipients.iter().zip(member.amounts.iter()).enumerate()
                         {
-                            let proportional = if j == member_n - 1 {
+                            let proportional = if j == (member_n - 1) as usize {
                                 member_funded - member_distributed
                             } else {
                                 (amount as u128 * member_funded as u128 / member_total as u128) as i128
@@ -1098,6 +1169,7 @@ impl SplitContract {
                 0,
                 0,
                 0,
+                Vec::new(env),
             );
             env.storage()
                 .persistent()
@@ -1179,34 +1251,8 @@ impl SplitContract {
             }
             
             // Issue #89: Distribute stake equally among unique payers if stake exists.
-            if invoice.stake_amount > 0 {
-                let usdc_token: Address = env
-                    .storage()
-                    .instance()
-                    .get(&usdc_token_key())
-                    .expect("usdc token not set");
-                let usdc_client = token::Client::new(&env, &usdc_token);
-                
-                let unique_payer_count = totals.len() as i128;
-                if unique_payer_count > 0 {
-                    let stake_per_payer = invoice.stake_amount / unique_payer_count;
-                    let mut distributed: i128 = 0;
-                    let mut payer_idx: i128 = 0;
-                    
-                    for (payer, _) in totals.iter() {
-                        let payout = if payer_idx == unique_payer_count - 1 {
-                            // Last payer gets remainder to handle rounding.
-                            invoice.stake_amount - distributed
-                        } else {
-                            stake_per_payer
-                        };
-                        usdc_client.transfer(&env.current_contract_address(), &payer, &payout);
-                        distributed += payout;
-                        payer_idx += 1;
-                    }
-                }
-            }
-            
+            // (stake_amount field not yet on Invoice; skipped)
+
             for (payer, amount) in totals.iter() {
                 token_client.transfer(&env.current_contract_address(), &payer, &amount);
             }
@@ -1232,20 +1278,8 @@ impl SplitContract {
             }
             
             // Issue #89: Return stake to creator if no payments were made.
-            if invoice.stake_amount > 0 {
-                let usdc_token: Address = env
-                    .storage()
-                    .instance()
-                    .get(&usdc_token_key())
-                    .expect("usdc token not set");
-                let usdc_client = token::Client::new(&env, &usdc_token);
-                usdc_client.transfer(
-                    &env.current_contract_address(),
-                    &invoice.creator,
-                    &invoice.stake_amount,
-                );
-            }
-            
+            // (stake_amount field not yet on Invoice; skipped)
+
             invoice.status = InvoiceStatus::Cancelled;
         }
 
@@ -1331,13 +1365,14 @@ impl SplitContract {
             old_invoice.allow_early_withdrawal,
             0, // No bonus pool on rollover
             0, // No bonus max payers on rollover
-            old_invoice.prerequisite_id.clone(),
+            old_invoice.prerequisite_id,
             old_invoice.tranches.clone(),
             old_invoice.co_signers.clone(),
             old_invoice.required_signatures,
             old_invoice.penalty_bps,
             old_invoice.penalty_deadline,
             old_invoice.min_funding_bps,
+            old_invoice.release_stages.clone(),
         );
 
         // Load the newly created invoice and copy over the payments.
@@ -1544,6 +1579,7 @@ impl SplitContract {
             0,
             0,
             0,
+            Vec::new(&env),
         )
     }
 

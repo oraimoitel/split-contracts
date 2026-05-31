@@ -102,6 +102,9 @@ pub struct InvoiceOptions {
     pub penalty_deadline: Option<u64>,
     /// Minimum funding threshold in basis points (issue #43).
     pub min_funding_bps: Option<u32>,
+    /// Issue #86: creator-triggered staged release schedule; each entry is
+    /// basis points (must sum to 10 000 when non-empty).
+    pub release_stages: Vec<u32>,
 }
 
 /// Legacy invoice layout used by stored invoices created before the `version`
@@ -182,6 +185,10 @@ pub struct Invoice {
     pub penalty_deadline: u64,
     /// Minimum funding threshold in basis points (issue #43); 0 means 100%.
     pub min_funding_bps: u32,
+    /// Issue #86: creator-triggered staged release schedule (basis points per stage).
+    pub release_stages: Vec<u32>,
+    /// Issue #86: number of stages already released.
+    pub released_stages: u32,
 }
 
 impl Invoice {
@@ -218,6 +225,8 @@ impl Invoice {
             penalty_bps: 0,
             penalty_deadline: 0,
             min_funding_bps: 0,
+            release_stages: Vec::new(env),
+            released_stages: 0,
         }
     }
 }
