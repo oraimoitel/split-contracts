@@ -219,6 +219,12 @@ impl Invoice {
     /// Upgrade a legacy (pre-version) invoice to the current schema.
     /// New fields are filled with their default (empty / zero) values.
     pub fn from_legacy(old: LegacyInvoice, env: &Env) -> Self {
+        let num_recipients = old.recipients.len();
+        let mut vesting_cliff_claimed = Vec::new(env);
+        for _ in 0..num_recipients {
+            vesting_cliff_claimed.push_back(false);
+        }
+
         Invoice {
             version: 2,
             creator: old.creator,
