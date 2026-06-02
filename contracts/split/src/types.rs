@@ -38,6 +38,13 @@ pub struct InvoicePayment {
 }
 
 #[contracttype]
+#[derive(Clone, Debug)]
+pub struct Bid {
+    pub bidder: Address,
+    pub amount: i128,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub enum InvoiceStatus {
     Pending,
@@ -136,6 +143,12 @@ pub struct InvoiceOptions {
     pub allow_early_withdrawal: bool,
     pub bonus_pool: i128,
     pub bonus_max_payers: u32,
+    /// Optional creator cosigner address that must co-author creator actions.
+    pub creator_cosigner: Option<Address>,
+    /// Velocity limit in token units for a single payer over `velocity_window`.
+    pub velocity_limit: i128,
+    /// Window length in seconds for velocity limiting.
+    pub velocity_window: u64,
     /// Issue #22: block release until this invoice is Released.
     pub prerequisite_id: Option<u64>,
     /// Issue #23: graduated release schedule; empty = release all at once.
@@ -165,6 +178,16 @@ pub struct InvoiceOptions {
     pub convert_to_stream: bool,
     /// Issue #2: tokens accepted in pay_with_token(); base token is always accepted implicitly.
     pub accepted_tokens: Vec<Address>,
+    /// Optional creator cosigner: when set, creator-gated functions require both auths.
+    pub creator_cosigner: Option<Address>,
+    /// Per-invoice velocity limit (0 = disabled).
+    pub velocity_limit: i128,
+    /// Velocity window length in seconds.
+    pub velocity_window: u64,
+    /// Optional automatic forwarding address target for leftover funds.
+    pub forward_to: Option<Address>,
+    /// Optional automatic forwarding to another invoice id.
+    pub forward_invoice_id: Option<u64>,
     /// Issue: per-recipient split rules evaluated at release time; empty = use amounts[].
     pub split_rules: Vec<SplitRule>,
     /// Issue: pre-agreed auto-resolution rules evaluated in order when auto_resolve() is called.
@@ -284,6 +307,10 @@ pub struct Invoice {
     pub convert_to_stream: bool,
     /// Issue #2: additional tokens accepted by pay_with_token().
     pub accepted_tokens: Vec<Address>,
+    /// Optional automatic forwarding address target for leftover funds.
+    pub forward_to: Option<Address>,
+    /// Optional automatic forwarding to another invoice id.
+    pub forward_invoice_id: Option<u64>,
     /// Issue: per-recipient split rules evaluated at release time; empty = use amounts[].
     pub split_rules: Vec<SplitRule>,
     /// Issue: pre-agreed auto-resolution rules evaluated in order when auto_resolve() is called.
@@ -364,9 +391,18 @@ impl Invoice {
             smart_route: false,
             convert_to_stream: false,
             accepted_tokens: Vec::new(env),
+            require_kyc: false,
+            auction_on_expiry: false,
+            auction_end: 0,
+            bids: Vec::new(env),
+            min_payment: 0,
             split_rules: Vec::new(env),
             auto_resolve_rules: Vec::new(env),
-            cross_chain_ref: None,
+            creator_cosigner: None,
+            velocity_limit: 0,
+            velocity_window: 0,
+            forward_to: None,
+            forward_invoice_id: None,
         }
     }
 }

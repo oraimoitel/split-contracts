@@ -100,22 +100,12 @@ pub fn delegate_revoked(env: &Env, invoice_id: u64) {
     );
 }
 
-/// Emitted when a payment reminder is triggered.
-/// Topics: (split, payment_reminder, invoice_id)
-/// Data: (address)
-pub fn payment_reminder(env: &Env, invoice_id: u64, address: &Address) {
+/// Emitted when an invoice is partially released.
+/// Topics: (split, part_rel, invoice_id)
+/// Data: recipients
+pub fn invoice_partially_released(env: &Env, invoice_id: u64, recipients: &Vec<Address>) {
     env.events().publish(
-        (symbol_short!("split"), symbol_short!("payment_reminder"), invoice_id),
-        (address.clone(),),
-    );
-}
-
-/// Emitted when a memo-based payment is matched to an invoice.
-/// Topics: (split, payment_matched, invoice_id)
-/// Data: (memo, payer)
-pub fn payment_matched(env: &Env, invoice_id: u64, memo: u64, payer: &Address) {
-    env.events().publish(
-        (symbol_short!("split"), symbol_short!("payment_matched"), invoice_id),
-        (memo, payer.clone()),
+        (symbol_short!("split"), symbol_short!("part_rel"), invoice_id),
+        recipients.clone(),
     );
 }
