@@ -9,6 +9,8 @@ mod types;
 mod test;
 
 use soroban_sdk::{
+    String,
+    String,
     contract, contractimpl, symbol_short, token, Address, Bytes, BytesN, Env, IntoVal, Map, Symbol, Val, Vec,
 };
 use types::{
@@ -20,6 +22,10 @@ use types::{
 // ---------------------------------------------------------------------------
 // Storage key helpers
 // ---------------------------------------------------------------------------
+
+fn governance_contract_key() -> Symbol {
+    symbol_short!("gov_ctr")
+}
 
 fn admin_key() -> Symbol {
     symbol_short!("admin")
@@ -80,6 +86,11 @@ fn referral_count_key(referrer: &Address) -> (Symbol, Address) {
 }
 
 /// Per-payer per-invoice nonce key (issue #21).
+
+fn channel_key(invoice_id: u64, payer: &Address) -> (Symbol, u64, Address) {
+    (symbol_short!("chan"), invoice_id, payer.clone())
+}
+
 fn nonce_key(invoice_id: u64, payer: &Address) -> (Symbol, u64, Address) {
     (symbol_short!("nonce"), invoice_id, payer.clone())
 }
@@ -233,6 +244,7 @@ impl SplitContract {
         env.storage().instance().set(&treasury_key(), &treasury);
         env.storage().instance().set(&usdc_token_key(), &usdc_token);
         env.storage().instance().set(&platform_fee_bps_key(), &platform_fee_bps);
+        env.storage().instance().set(&governance_contract_key(), &governance_contract);
         env.storage().persistent().set(&paused_key(), &false);
         if let Some(contract) = compliance_contract {
             env.storage().persistent().set(&soroban_sdk::symbol_short!("comp_ctr"), &contract);
@@ -489,7 +501,15 @@ impl SplitContract {
             + 1;
         env.storage().persistent().set(&counter_key(), &id);
 
+
         let total: i128 = amounts.iter().sum();
+
+        let gov_opt: Option<Option<Address>> = env.storage().instance().get(&governance_contract_key());
+        if let Some(Some(gov)) = gov_opt {
+            let approved: bool = env.invoke_contract(&gov, &Symbol::new(env, "check_approval"), (creator.clone(), total).into_val(env));
+            assert!(approved, "governance approval required");
+        }
+
 
         if bonus_pool > 0 {
             let token_client = token::Client::new(env, &token);
@@ -561,7 +581,7 @@ impl SplitContract {
         };
 
         save_invoice(env, id, &invoice);
-        events::invoice_created(env, id, &creator, total);
+        events::invoice_created(env, id, &creator, total, &cross_chain_ref);
 
         // Index each recipient -> invoice ID (issue #40).
         for recipient in invoice.recipients.iter() {
@@ -711,6 +731,122 @@ impl SplitContract {
     /// `auto_convert` (issue #88): when true, invokes DEX swap to convert payer's
     /// source asset to invoice token before crediting payment. When false, behaves
     /// identically to current implementation.
+
+    /// Compress payments by aggregating all payments from the same payer into a single entry.
+    pub fn compress_payments(env: Env, invoice_id: u64) {
+        require_not_paused(&env);
+        let mut invoice = load_invoice(&env, invoice_id);
+
+        let mut payer_amounts: Map<Address, i128> = Map::new(&env);
+        let mut payer_tips: Map<Address, i128> = Map::new(&env);
+
+        for p in invoice.payments.iter() {
+            let current_amt = payer_amounts.get(p.payer.clone()).unwrap_or(0);
+            payer_amounts.set(p.payer.clone(), current_amt + p.amount);
+            
+            let current_tip = payer_tips.get(p.payer.clone()).unwrap_or(0);
+            payer_tips.set(p.payer.clone(), current_tip + p.tip);
+        }
+
+        let mut new_payments: Vec<Payment> = Vec::new(&env);
+        for (payer, amount) in payer_amounts.iter() {
+            let tip = payer_tips.get(payer.clone()).unwrap_or(0);
+            new_payments.push_back(Payment { payer, amount, tip });
+        }
+
+        invoice.payments = new_payments;
+
+        // Verify total funded is unchanged (optional assertion, as asked by Acceptance Criteria)
+        let mut total_funded: i128 = 0;
+        for p in invoice.payments.iter() {
+            total_funded += p.amount;
+        }
+        assert_eq!(total_funded, invoice.funded, "total funded changed after compression");
+
+        save_invoice(&env, invoice_id, &invoice);
+    }
+
+
+    // -----------------------------------------------------------------------
+    // Payment Channel (Issue #1)
+    // -----------------------------------------------------------------------
+
+    pub fn open_channel(env: Env, payer: Address, invoice_id: u64, deposit: i128) {
+        require_not_paused(&env);
+        payer.require_auth();
+        assert!(deposit > 0, "deposit must be positive");
+
+        let invoice = load_invoice(&env, invoice_id);
+        assert!(invoice.status == InvoiceStatus::Pending, "invoice is not pending");
+
+        let token_client = token::Client::new(&env, &invoice.tokens.get(0).expect("no token"));
+        token_client.transfer(&payer, &env.current_contract_address(), &deposit);
+
+        // Store (balance, deposited)
+        let state: (i128, i128) = (deposit, deposit);
+        env.storage().persistent().set(&channel_key(invoice_id, &payer), &state);
+    }
+
+    pub fn channel_pay(env: Env, payer: Address, invoice_id: u64, amount: i128) {
+        require_not_paused(&env);
+        payer.require_auth();
+        assert!(amount > 0, "amount must be positive");
+
+        let mut state: (i128, i128) = env.storage().persistent().get(&channel_key(invoice_id, &payer)).expect("channel not found");
+        assert!(state.0 >= amount, "insufficient channel balance");
+
+        state.0 -= amount;
+        env.storage().persistent().set(&channel_key(invoice_id, &payer), &state);
+    }
+
+    pub fn close_channel(env: Env, payer: Address, invoice_id: u64) {
+        require_not_paused(&env);
+        payer.require_auth();
+
+        let state: (i128, i128) = env.storage().persistent().get(&channel_key(invoice_id, &payer)).expect("channel not found");
+        let balance = state.0;
+        let deposited = state.1;
+        let net_paid = deposited - balance;
+
+        let mut invoice = load_invoice(&env, invoice_id);
+
+        if net_paid > 0 {
+            assert!(invoice.status == InvoiceStatus::Pending, "invoice is not pending");
+
+            invoice.payments.push_back(Payment { payer: payer.clone(), amount: net_paid, tip: 0 });
+            invoice.funded += net_paid;
+
+            // In real app we might handle penalty/oracle, but for simplicity:
+            events::payment_received(&env, invoice_id, &payer, net_paid);
+            
+            let total: i128 = invoice.amounts.iter().sum();
+            
+            if invoice.funded >= total {
+                let in_group = env.storage().persistent().has(&invoice_group_key(invoice_id));
+                let guarded =
+                    invoice.prerequisite_id.is_some()
+                        || !invoice.tranches.is_empty()
+                        || !invoice.release_stages.is_empty()
+                        || in_group
+                        || !invoice.co_signers.is_empty();
+                if guarded {
+                    save_invoice(&env, invoice_id, &invoice);
+                } else {
+                    Self::_release(&env, invoice_id, &mut invoice, &payer);
+                }
+            } else {
+                save_invoice(&env, invoice_id, &invoice);
+            }
+        }
+
+        if balance > 0 {
+            let token_client = token::Client::new(&env, &invoice.tokens.get(0).expect("no token"));
+            token_client.transfer(&env.current_contract_address(), &payer, &balance);
+        }
+
+        env.storage().persistent().remove(&channel_key(invoice_id, &payer));
+    }
+
     pub fn pay(env: Env, payer: Address, invoice_id: u64, amount: i128, nonce: u64, auto_convert: bool) {
         require_not_paused(&env);
         payer.require_auth();
