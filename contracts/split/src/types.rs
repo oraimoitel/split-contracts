@@ -154,6 +154,11 @@ pub struct LegacyInvoice {
     pub released_bps: u32,
     pub stake_amount: i128,
     pub referrer: Option<Address>,
+    pub tax_bps: u32,
+    pub tax_authority: Option<Address>,
+    pub insurance_premium_bps: u32,
+    pub insurance_fund: i128,
+    pub smart_route: bool,
 }
 
 #[contracttype]
