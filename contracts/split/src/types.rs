@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol, Vec, String};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -120,9 +120,10 @@ pub struct InvoiceOptions {
     pub price_oracle: Option<Address>,
     /// Issue #41: optional preferred output token per recipient for DEX swap on release.
     pub swap_tokens: Vec<Option<Address>>,
+    pub tax_bps: Option<u32>,
+    pub tax_authority: Option<Address>,
     pub insurance_premium_bps: Option<u32>,
-    /// When true, _release() routes payments via DEX path-finding for optimal execution.
-    pub smart_route: bool,
+    pub smart_route: Option<bool>,
 }
 
 /// Legacy invoice layout used by stored invoices created before the `version`
@@ -225,7 +226,6 @@ pub struct Invoice {
     pub tax_authority: Option<Address>,
     pub insurance_premium_bps: u32,
     pub insurance_fund: i128,
-    /// When true, _release() routes payments via DEX path-finding for optimal execution.
     pub smart_route: bool,
 }
 
@@ -286,11 +286,11 @@ impl Invoice {
             allowed_payers: None,
             price_oracle: None,
             swap_tokens: Vec::new(env),
-            tax_bps: old.tax_bps,
-            tax_authority: old.tax_authority,
-            insurance_premium_bps: old.insurance_premium_bps,
-            insurance_fund: old.insurance_fund,
-            smart_route: old.smart_route,
+            tax_bps: 0,
+            tax_authority: None,
+            insurance_premium_bps: 0,
+            insurance_fund: 0,
+            smart_route: false,
         }
     }
 }
