@@ -46,6 +46,13 @@ pub struct InvoicePayment {
 }
 
 #[contracttype]
+#[derive(Clone, Debug)]
+pub struct Bid {
+    pub bidder: Address,
+    pub amount: i128,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub enum InvoiceStatus {
     Pending,
@@ -144,6 +151,12 @@ pub struct InvoiceOptions {
     pub allow_early_withdrawal: bool,
     pub bonus_pool: i128,
     pub bonus_max_payers: u32,
+    /// Optional creator cosigner address that must co-author creator actions.
+    pub creator_cosigner: Option<Address>,
+    /// Velocity limit in token units for a single payer over `velocity_window`.
+    pub velocity_limit: i128,
+    /// Window length in seconds for velocity limiting.
+    pub velocity_window: u64,
     /// Issue #22: block release until this invoice is Released.
     pub prerequisite_id: Option<u64>,
     /// Issue #23: graduated release schedule; empty = release all at once.
@@ -175,10 +188,24 @@ pub struct InvoiceOptions {
     pub convert_to_stream: bool,
     /// Issue #2: tokens accepted in pay_with_token(); base token is always accepted implicitly.
     pub accepted_tokens: Vec<Address>,
+    /// Optional creator cosigner: when set, creator-gated functions require both auths.
+    pub creator_cosigner: Option<Address>,
+    /// Per-invoice velocity limit (0 = disabled).
+    pub velocity_limit: i128,
+    /// Velocity window length in seconds.
+    pub velocity_window: u64,
+    /// Optional automatic forwarding address target for leftover funds.
+    pub forward_to: Option<Address>,
+    /// Optional automatic forwarding to another invoice id.
+    pub forward_invoice_id: Option<u64>,
     /// Issue: per-recipient split rules evaluated at release time; empty = use amounts[].
     pub split_rules: Vec<SplitRule>,
     /// Issue: pre-agreed auto-resolution rules evaluated in order when auto_resolve() is called.
     pub auto_resolve_rules: Vec<ResolveRule>,
+    /// Optional oracle address that must confirm the condition before release.
+    pub oracle_address: Option<Address>,
+    /// Optional cross-chain reference carried through invoice creation.
+    pub cross_chain_ref: Option<String>,
 }
 
 /// Legacy invoice layout used by stored invoices created before the `version`
@@ -258,6 +285,10 @@ pub struct Invoice {
     pub approver: Option<Address>,
     /// Whether the approver has approved the invoice (issue #25).
     pub approved: bool,
+    /// Optional oracle address that must confirm a condition before release.
+    pub oracle_address: Option<Address>,
+    /// Whether the oracle condition has been met.
+    pub condition_met: bool,
     /// Penalty basis points for payments after `penalty_deadline` (issue #42).
     pub penalty_bps: u32,
     /// Soft deadline; payments after this timestamp incur a penalty (issue #42).
@@ -286,15 +317,25 @@ pub struct Invoice {
     pub convert_to_stream: bool,
     /// Issue #2: additional tokens accepted by pay_with_token().
     pub accepted_tokens: Vec<Address>,
+    /// Optional automatic forwarding address target for leftover funds.
+    pub forward_to: Option<Address>,
+    /// Optional automatic forwarding to another invoice id.
+    pub forward_invoice_id: Option<u64>,
     /// Issue: per-recipient split rules evaluated at release time; empty = use amounts[].
     pub split_rules: Vec<SplitRule>,
     /// Issue: pre-agreed auto-resolution rules evaluated in order when auto_resolve() is called.
     pub auto_resolve_rules: Vec<ResolveRule>,
-    pub overflow_behavior: OverflowBehavior,
-    pub notification_contract: Option<Address>,
+    pub cross_chain_ref: Option<String>,
 }
 
 /// Issue #144: Payment analytics for an invoice, callable by external contracts.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TreasuryRecord {
+    pub invoice_ids: Vec<u64>,
+    pub treasury: Address,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct InvoiceStats {
@@ -343,6 +384,8 @@ impl Invoice {
             signatures: Vec::new(env),
             approver: None,
             approved: false,
+            oracle_address: None,
+            condition_met: false,
             penalty_bps: 0,
             penalty_deadline: 0,
             min_funding_bps: 0,
@@ -358,10 +401,18 @@ impl Invoice {
             smart_route: false,
             convert_to_stream: false,
             accepted_tokens: Vec::new(env),
+            require_kyc: false,
+            auction_on_expiry: false,
+            auction_end: 0,
+            bids: Vec::new(env),
+            min_payment: 0,
             split_rules: Vec::new(env),
             auto_resolve_rules: Vec::new(env),
-            overflow_behavior: OverflowBehavior::Reject,
-            notification_contract: None,
+            creator_cosigner: None,
+            velocity_limit: 0,
+            velocity_window: 0,
+            forward_to: None,
+            forward_invoice_id: None,
         }
     }
 }
