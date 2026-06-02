@@ -351,6 +351,8 @@ impl SplitContract {
         token: Address,
         deadline: u64,
         options: InvoiceOptions,
+        tax_bps: u32,
+        tax_authority: Option<Address>,
     ) -> u64 {
         require_not_paused(&env);
         creator.require_auth();
@@ -375,6 +377,8 @@ impl SplitContract {
             options.release_stages,
             options.price_oracle,
             options.swap_tokens,
+            tax_bps,
+            tax_authority,
         )
     }
 
@@ -401,6 +405,8 @@ impl SplitContract {
         release_stages: Vec<u32>,
         price_oracle: Option<Address>,
         swap_tokens: Vec<Option<Address>>,
+        tax_bps: u32,
+        tax_authority: Option<Address>,
     ) -> u64 {
         assert!(
             recipients.len() == amounts.len(),
@@ -526,6 +532,8 @@ impl SplitContract {
             allowed_payers: None,
             price_oracle,
             swap_tokens,
+            tax_bps,
+            tax_authority,
         };
 
         save_invoice(env, id, &invoice);
@@ -589,6 +597,8 @@ impl SplitContract {
                 Vec::new(&env),
                 None,
                 Vec::new(&env),
+                0,
+                None,
             );
             ids.push_back(id);
         }
@@ -638,6 +648,8 @@ impl SplitContract {
             Vec::new(&env),
             None,
             Vec::new(&env),
+            0,
+            None,
         );
 
         if months > 1 {
@@ -1026,6 +1038,7 @@ impl SplitContract {
         let funded = invoice.funded;
         let n = invoice.recipients.len();
         let mut total_fee: i128 = 0;
+        let mut total_tax: i128 = 0;
         for i in 0..n {
             let recipient = invoice.recipients.get(i).unwrap();
             let amount = invoice.amounts.get(i).unwrap();
@@ -1036,10 +1049,20 @@ impl SplitContract {
                 / (10000u128 * total as u128);
             let payout_raw = payout_raw as i128;
             if payout_raw > 0 {
-                let fee = (payout_raw as u128 * platform_fee_bps as u128 / 10_000u128) as i128;
-                let payout = payout_raw - fee;
+                let tax = (payout_raw as u128 * invoice.tax_bps as u128 / 10_000u128) as i128;
+                let post_tax = payout_raw - tax;
+                total_tax += tax;
+
+                let fee = (post_tax as u128 * platform_fee_bps as u128 / 10_000u128) as i128;
+                let payout = post_tax - fee;
                 total_fee += fee;
                 token_client.transfer(&env.current_contract_address(), &recipient, &payout);
+            }
+        }
+
+        if total_tax > 0 {
+            if let Some(ref auth) = invoice.tax_authority {
+                token_client.transfer(&env.current_contract_address(), auth, &total_tax);
             }
         }
 
@@ -1229,6 +1252,7 @@ impl SplitContract {
         let n = invoice.recipients.len();
         let mut distributed: i128 = 0;
         let mut total_fee: i128 = 0;
+        let mut total_tax: i128 = 0;
         for i in 0..n {
             let recipient = invoice.recipients.get(i).unwrap();
             let amount = invoice.amounts.get(i).unwrap();
@@ -1237,9 +1261,14 @@ impl SplitContract {
             } else {
                 (amount as u128 * funded as u128 / total as u128) as i128
             };
-            let fee = (proportional as u128 * platform_fee_bps as u128 / 10_000u128) as i128;
-            let payout = proportional - fee;
             distributed += proportional;
+
+            let tax = (proportional as u128 * invoice.tax_bps as u128 / 10_000u128) as i128;
+            let post_tax = proportional - tax;
+            total_tax += tax;
+
+            let fee = (post_tax as u128 * platform_fee_bps as u128 / 10_000u128) as i128;
+            let payout = post_tax - fee;
             total_fee += fee;
 
             // Issue #41: if a swap token is configured for this recipient, invoke DEX swap.
@@ -1260,6 +1289,12 @@ impl SplitContract {
                 let _swapped: i128 = env.invoke_contract(out_token, &Symbol::new(env, "swap"), args);
             } else {
                 token_client.transfer(&env.current_contract_address(), &recipient, &payout);
+            }
+        }
+
+        if total_tax > 0 {
+            if let Some(ref auth) = invoice.tax_authority {
+                token_client.transfer(&env.current_contract_address(), auth, &total_tax);
             }
         }
 

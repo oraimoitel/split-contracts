@@ -150,6 +150,8 @@ pub struct LegacyInvoice {
     pub released_bps: u32,
     pub stake_amount: i128,
     pub referrer: Option<Address>,
+    pub tax_bps: u32,
+    pub tax_authority: Option<Address>,
 }
 
 #[contracttype]
@@ -213,6 +215,8 @@ pub struct Invoice {
     /// Issue #41: optional preferred output token per recipient for DEX swap on release.
     /// Parallel to `recipients`; None means pay in the invoice token as normal.
     pub swap_tokens: Vec<Option<Address>>,
+    pub tax_bps: u32,
+    pub tax_authority: Option<Address>,
 }
 
 /// Issue #144: Payment analytics for an invoice, callable by external contracts.
@@ -272,6 +276,8 @@ impl Invoice {
             allowed_payers: None,
             price_oracle: None,
             swap_tokens: Vec::new(env),
+            tax_bps: old.tax_bps,
+            tax_authority: old.tax_authority,
         }
     }
 }
