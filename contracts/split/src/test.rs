@@ -4177,3 +4177,109 @@ fn test_min_funding_amount_releases_when_met() {
     assert_eq!(invoice.funded, 100);
     assert_eq!(invoice.status, InvoiceStatus::Released);
 }
+
+#[test]
+#[should_panic(expected = "payment cooldown active")]
+fn test_cooldown_blocks_same_payer_within_window() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let stellar_asset = StellarAssetClient::new(&env, &token_id);
+
+    let payer = Address::generate(&env);
+    let other_payer = Address::generate(&env);
+    stellar_asset.mint(&payer, &500);
+    stellar_asset.mint(&other_payer, &500);
+
+    env.ledger().set_timestamp(1_000);
+    let id = single_recipient_invoice(
+        &env,
+        &c,
+        &token_id,
+        500,
+        invoice_options(Some(60), None, None),
+    );
+
+    c.pay(&payer, &id, &100_i128);
+    c.pay(&other_payer, &id, &100_i128);
+    c.pay(&payer, &id, &100_i128);
+}
+
+#[test]
+#[should_panic(expected = "payment rate limit exceeded")]
+fn test_rate_limit_blocks_after_n_payments() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let stellar_asset = StellarAssetClient::new(&env, &token_id);
+
+    env.ledger().set_timestamp(1_000);
+    let id = single_recipient_invoice(
+        &env,
+        &c,
+        &token_id,
+        500,
+        invoice_options(None, Some(2), Some(60)),
+    );
+
+    for _ in 0..3 {
+        let payer = Address::generate(&env);
+        stellar_asset.mint(&payer, &100);
+        c.pay(&payer, &id, &100_i128);
+    }
+}
+
+#[test]
+fn test_rate_limit_window_resets() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let stellar_asset = StellarAssetClient::new(&env, &token_id);
+
+    env.ledger().set_timestamp(1_000);
+    let id = single_recipient_invoice(
+        &env,
+        &c,
+        &token_id,
+        500,
+        invoice_options(None, Some(2), Some(60)),
+    );
+
+    for _ in 0..2 {
+        let payer = Address::generate(&env);
+        stellar_asset.mint(&payer, &100);
+        c.pay(&payer, &id, &100_i128);
+    }
+
+    env.ledger().set_timestamp(1_061);
+    let payer = Address::generate(&env);
+    stellar_asset.mint(&payer, &100);
+    c.pay(&payer, &id, &100_i128);
+}
+
+#[test]
+#[should_panic(expected = "payment rate limit exceeded")]
+fn test_cooldown_and_rate_limit_independent() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+    let stellar_asset = StellarAssetClient::new(&env, &token_id);
+
+    let payer = Address::generate(&env);
+    let other_payer = Address::generate(&env);
+    stellar_asset.mint(&payer, &500);
+    stellar_asset.mint(&other_payer, &500);
+
+    env.ledger().set_timestamp(1_000);
+    let id = single_recipient_invoice(
+        &env,
+        &c,
+        &token_id,
+        500,
+        invoice_options(Some(120), Some(1), Some(60)),
+    );
+
+    let ext = c.get_invoice_ext(&id);
+    assert_eq!(ext.payment_cooldown_secs, Some(120));
+    assert_eq!(ext.max_payments_per_window, Some(1));
+    assert_eq!(ext.payment_window_secs, Some(60));
+
+    c.pay(&payer, &id, &100_i128);
+    c.pay(&other_payer, &id, &100_i128);
+}

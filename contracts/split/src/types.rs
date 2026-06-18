@@ -607,3 +607,28 @@ impl Invoice {
         }
     }
 }
+
+impl From<InvoiceOptions> for InvoiceExt {
+    fn from(options: InvoiceOptions) -> Self {
+        Self {
+            payment_cooldown_secs: options.payment_cooldown_secs,
+            max_payments_per_window: options.max_payments_per_window,
+            payment_window_secs: options.payment_window_secs,
+        }
+    }
+}
+
+impl From<InvoiceCore> for Invoice {
+    fn from(core: InvoiceCore) -> Self {
+        Self {
+            creator: core.creator,
+            recipients: core.recipients,
+            amounts: core.amounts,
+            token: core.token,
+            deadline: core.deadline,
+            funded: core.funded,
+            status: core.status,
+            payments: core.payments,
+        }
+    }
+}

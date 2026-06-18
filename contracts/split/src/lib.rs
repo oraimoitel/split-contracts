@@ -410,6 +410,19 @@ fn load_treasury_record(env: &Env, group_id: u64) -> TreasuryRecord {
         .expect("treasury record not found")
 }
 
+fn save_invoice_ext(env: &Env, id: u64, ext: &InvoiceExt) {
+    env.storage()
+        .persistent()
+        .set(&invoice_ext_key(id), ext);
+}
+
+fn load_invoice_ext(env: &Env, id: u64) -> InvoiceExt {
+    env.storage()
+        .persistent()
+        .get(&invoice_ext_key(id))
+        .expect("invoice extension not found")
+}
+
 // ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------
@@ -4040,5 +4053,90 @@ impl SplitContract {
         } else {
             save_invoice(&env, invoice_id, &invoice);
         }
+    }
+
+    fn enforce_payment_limits(
+        env: &Env,
+        invoice_id: u64,
+        payer: &Address,
+        ext: &InvoiceExt,
+        now: u64,
+    ) {
+        if let Some(cooldown_secs) = ext.payment_cooldown_secs {
+            let last_payment: Option<u64> = env
+                .storage()
+                .persistent()
+                .get(&payer_cooldown_key(invoice_id, payer.clone()));
+
+            if let Some(last_payment_at) = last_payment {
+                assert!(
+                    last_payment_at.saturating_add(cooldown_secs) <= now,
+                    "payment cooldown active"
+                );
+            }
+        }
+
+        if let (Some(max_payments), Some(window_secs)) =
+            (ext.max_payments_per_window, ext.payment_window_secs)
+        {
+            let recent = Self::active_payment_window(env, invoice_id, now, window_secs);
+            assert!(
+                recent.len() < max_payments,
+                "payment rate limit exceeded"
+            );
+        }
+    }
+
+    fn record_payment_limits(
+        env: &Env,
+        invoice_id: u64,
+        payer: &Address,
+        ext: &InvoiceExt,
+        now: u64,
+    ) {
+        if ext.payment_cooldown_secs.is_some() {
+            env.storage()
+                .persistent()
+                .set(&payer_cooldown_key(invoice_id, payer.clone()), &now);
+        }
+
+        if let (Some(_), Some(window_secs)) =
+            (ext.max_payments_per_window, ext.payment_window_secs)
+        {
+            let mut recent = Self::active_payment_window(env, invoice_id, now, window_secs);
+            while recent.len() >= PAYMENT_WINDOW_CAP {
+                recent.pop_front();
+            }
+            recent.push_back(now);
+            env.storage()
+                .persistent()
+                .set(&payment_window_key(invoice_id), &recent);
+        }
+    }
+
+    fn active_payment_window(
+        env: &Env,
+        invoice_id: u64,
+        now: u64,
+        window_secs: u64,
+    ) -> Vec<u64> {
+        let stored: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&payment_window_key(invoice_id))
+            .unwrap_or(Vec::new(env));
+        let mut active = Vec::new(env);
+
+        for paid_at in stored.iter() {
+            if paid_at.saturating_add(window_secs) > now {
+                active.push_back(paid_at);
+            }
+        }
+
+        while active.len() > PAYMENT_WINDOW_CAP {
+            active.pop_front();
+        }
+
+        active
     }
 }
