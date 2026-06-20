@@ -77,12 +77,13 @@ fn default_options(env: &Env) -> InvoiceOptions {
 }
 
 fn invoice_options(
+    env: &Env,
     cooldown_secs: Option<u64>,
     max_payments: Option<u32>,
     window_secs: Option<u64>,
 ) -> InvoiceOptions {
     InvoiceOptions {
-        co_creators: Vec::new(&Env::default()),
+        co_creators: Vec::new(env),
         allow_early_withdrawal: false,
         bonus_pool: 0,
         bonus_max_payers: 0,
@@ -90,15 +91,15 @@ fn invoice_options(
         velocity_limit: 0,
         velocity_window: 0,
         prerequisite_id: None,
-        tranches: Vec::new(&Env::default()),
-        co_signers: Vec::new(&Env::default()),
+        tranches: Vec::new(env),
+        co_signers: Vec::new(env),
         required_signatures: 0,
         penalty_bps: None,
         penalty_deadline: None,
         min_funding_bps: None,
-        release_stages: Vec::new(&Env::default()),
+        release_stages: Vec::new(env),
         price_oracle: None,
-        swap_tokens: Vec::new(&Env::default()),
+        swap_tokens: Vec::new(env),
         tax_bps: None,
         tax_authority: None,
         insurance_premium_bps: None,
@@ -106,11 +107,11 @@ fn invoice_options(
         notification_contract: None,
         overflow_behavior: types::OverflowBehavior::Reject,
         convert_to_stream: false,
-        accepted_tokens: Vec::new(&Env::default()),
+        accepted_tokens: Vec::new(env),
         forward_to: None,
         forward_invoice_id: None,
-        split_rules: Vec::new(&Env::default()),
-        auto_resolve_rules: Vec::new(&Env::default()),
+        split_rules: Vec::new(env),
+        auto_resolve_rules: Vec::new(env),
         oracle_address: None,
         cross_chain_ref: None,
         allowed_payers: None,
@@ -4260,7 +4261,7 @@ fn test_cooldown_blocks_same_payer_within_window() {
         &c,
         &token_id,
         500,
-        invoice_options(Some(60), None, None),
+        invoice_options(&env, Some(60), None, None),
     );
 
     c.pay(&payer, &id, &100_i128, &0_u64, &false);
@@ -4281,7 +4282,7 @@ fn test_rate_limit_blocks_after_n_payments() {
         &c,
         &token_id,
         500,
-        invoice_options(None, Some(2), Some(60)),
+        invoice_options(&env, None, Some(2), Some(60)),
     );
 
     for _ in 0..3 {
@@ -4303,7 +4304,7 @@ fn test_rate_limit_window_resets() {
         &c,
         &token_id,
         500,
-        invoice_options(None, Some(2), Some(60)),
+        invoice_options(&env, None, Some(2), Some(60)),
     );
 
     for _ in 0..2 {
@@ -4336,7 +4337,7 @@ fn test_cooldown_and_rate_limit_independent() {
         &c,
         &token_id,
         500,
-        invoice_options(Some(120), Some(1), Some(60)),
+        invoice_options(&env, Some(120), Some(1), Some(60)),
     );
 
     let ext = c.get_invoice_ext(&id);
