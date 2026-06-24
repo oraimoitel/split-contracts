@@ -13,7 +13,7 @@ use soroban_sdk::{
     contract, contractimpl, symbol_short, token, Address, Bytes, BytesN, Env, IntoVal, Map, Symbol, Val, Vec,
 };
 use types::{
-    AuditEntry, Bid, CloneOverrides, CompletionProof, CreateInvoiceParams, Invoice, InvoiceCore,
+    AuditEntry, Bid, CloneOverrides, CompactInvoice, CompletionProof, CreateInvoiceParams, Invoice, InvoiceCore,
     InvoiceExt, InvoiceExt2, InvoiceOptions, InvoicePayment, InvoiceStatus, InvoiceTemplate,
     LegacyInvoice, OverflowBehavior, Payment, PaymentProof, ResolveAction, ResolveRule,
     SplitRule, SubscriptionParams, Tranche, TreasuryRecord,
@@ -56,6 +56,9 @@ fn invoice_ext_key(id: u64) -> (Symbol, u64) {
 }
 fn invoice_ext2_key(id: u64) -> (Symbol, u64) {
     (symbol_short!("inv_ex2"), id)
+}
+fn invoice_compact_key(id: u64) -> (Symbol, u64) {
+    (symbol_short!("inv_cpt"), id)
 }
 fn audit_log_key(id: u64) -> (Symbol, u64) {
     (symbol_short!("log"), id)
@@ -325,7 +328,13 @@ fn load_invoice(env: &Env, id: u64) -> Invoice {
             min_funding_amount: 0,
             priorities: Vec::new(env),
         });
-    Invoice::assemble(core, ext, ext2)
+    
+    // Load compact representation if available
+    if let Some(compact) = env.storage().persistent().get::<_, CompactInvoice>(&invoice_compact_key(id)) {
+        Invoice::from_compact(&compact, core, ext, ext2)
+    } else {
+        Invoice::assemble(core, ext, ext2)
+    }
 }
 
 fn save_invoice(env: &Env, id: u64, invoice: &Invoice) {
@@ -333,6 +342,10 @@ fn save_invoice(env: &Env, id: u64, invoice: &Invoice) {
     env.storage().persistent().set(&invoice_key(id), &core);
     env.storage().persistent().set(&invoice_ext_key(id), &ext);
     env.storage().persistent().set(&invoice_ext2_key(id), &ext2);
+    
+    // Store compact representation
+    let compact = invoice.to_compact(env);
+    env.storage().persistent().set(&invoice_compact_key(id), &compact);
 }
 
 fn append_audit_entry(env: &Env, id: u64, action: Symbol, actor: &Address) {

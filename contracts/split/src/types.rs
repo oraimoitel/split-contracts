@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol, Vec, String};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN, Env, Symbol, Vec, String};
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -594,7 +594,79 @@ pub struct InvoiceStats {
     pub completion_bps: u32,
 }
 
+/// Compact storage representation of Invoice — serializes InvoiceCore fields using minimal byte encoding.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CompactInvoice {
+    /// Serialized bytes: [status(1), funded(16), deadline(8), ...rest]
+    pub data: Bytes,
+}
+
 impl Invoice {
+    /// Convert Invoice to compact byte representation.
+    pub fn to_compact(&self, env: &Env) -> CompactInvoice {
+        let mut bytes = Bytes::new(env);
+        
+        // Pack status as 1 byte
+        let status_byte: u8 = match self.status {
+            InvoiceStatus::Pending => 0,
+            InvoiceStatus::Released => 1,
+            InvoiceStatus::Refunded => 2,
+            InvoiceStatus::Cancelled => 3,
+        };
+        bytes.push_back(status_byte);
+        
+        // Pack funded as 16 bytes (i128)
+        let funded_bytes = self.funded.to_be_bytes();
+        for byte in funded_bytes.iter() {
+            bytes.push_back(*byte);
+        }
+        
+        // Pack deadline as 8 bytes (u64)
+        let deadline_bytes = self.deadline.to_be_bytes();
+        for byte in deadline_bytes.iter() {
+            bytes.push_back(*byte);
+        }
+        
+        CompactInvoice { data: bytes }
+    }
+    
+    /// Restore Invoice from compact byte representation.
+    pub fn from_compact(compact: &CompactInvoice, core: InvoiceCore, ext: InvoiceExt, ext2: InvoiceExt2) -> Self {
+        let bytes = &compact.data;
+        
+        // Unpack status (1 byte)
+        let status_byte = bytes.get(0).unwrap();
+        let status = match status_byte {
+            0 => InvoiceStatus::Pending,
+            1 => InvoiceStatus::Released,
+            2 => InvoiceStatus::Refunded,
+            3 => InvoiceStatus::Cancelled,
+            _ => InvoiceStatus::Pending,
+        };
+        
+        // Unpack funded (16 bytes)
+        let mut funded_bytes = [0u8; 16];
+        for i in 0..16 {
+            funded_bytes[i] = bytes.get((1 + i) as u32).unwrap();
+        }
+        let funded = i128::from_be_bytes(funded_bytes);
+        
+        // Unpack deadline (8 bytes)
+        let mut deadline_bytes = [0u8; 8];
+        for i in 0..8 {
+            deadline_bytes[i] = bytes.get((17 + i) as u32).unwrap();
+        }
+        let deadline = u64::from_be_bytes(deadline_bytes);
+        
+        // Reconstruct full invoice with updated fields
+        let mut invoice = Invoice::assemble(core, ext, ext2);
+        invoice.status = status;
+        invoice.funded = funded;
+        invoice.deadline = deadline;
+        invoice
+    }
+
     /// Upgrade a legacy (pre-version) invoice to the current schema.
     /// New fields are filled with their default (empty / zero) values.
     pub fn from_legacy(old: LegacyInvoice, env: &Env) -> Self {
