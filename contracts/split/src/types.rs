@@ -329,6 +329,7 @@ pub struct InvoiceExt {
     pub payment_cooldown_secs: Option<u64>,
     pub max_payments_per_window: Option<u32>,
     pub payment_window_secs: Option<u64>,
+    pub admin_frozen: bool,
 }
 
 #[contracttype]
@@ -345,6 +346,23 @@ pub struct InvoiceExt2 {
     pub min_funding_amount: i128,
     /// Issue: per-recipient release priority (ascending = higher priority); empty = no priority ordering.
     pub priorities: Vec<u32>,
+}
+
+/// Timelocked admin action queued for future execution.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub enum TimelockAction {
+    SetTreasury(Address),
+    SetPlatformFee(u32),
+}
+
+/// A queued timelock action with metadata.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct QueuedAction {
+    pub action: TimelockAction,
+    pub queued_at: u64,
+    pub executed: bool,
 }
 
 /// Full invoice — assembled from InvoiceCore + InvoiceExt + InvoiceExt2.
@@ -407,6 +425,7 @@ pub struct Invoice {
     pub payment_cooldown_secs: Option<u64>,
     pub max_payments_per_window: Option<u32>,
     pub payment_window_secs: Option<u64>,
+    pub admin_frozen: bool,
     pub notification_contract: Option<Address>,
     pub overflow_behavior: OverflowBehavior,
     pub cross_chain_ref: Option<String>,
@@ -486,6 +505,7 @@ impl Invoice {
                 payment_cooldown_secs: self.payment_cooldown_secs,
                 max_payments_per_window: self.max_payments_per_window,
                 payment_window_secs: self.payment_window_secs,
+                admin_frozen: self.admin_frozen,
             },
             InvoiceExt2 {
                 notification_contract: self.notification_contract,
@@ -562,6 +582,7 @@ impl Invoice {
             payment_cooldown_secs: ext.payment_cooldown_secs,
             max_payments_per_window: ext.max_payments_per_window,
             payment_window_secs: ext.payment_window_secs,
+            admin_frozen: ext.admin_frozen,
             notification_contract: ext2.notification_contract,
             overflow_behavior: ext2.overflow_behavior,
             cross_chain_ref: ext2.cross_chain_ref,
@@ -658,6 +679,7 @@ impl Invoice {
             payment_cooldown_secs: None,
             max_payments_per_window: None,
             payment_window_secs: None,
+            admin_frozen: false,
             forward_to: None,
             forward_invoice_id: None,
             notification_contract: None,

@@ -1,4 +1,5 @@
 use soroban_sdk::{symbol_short, Address, Env, Vec, String};
+use crate::types::TimelockAction;
 
 /// Emitted when a new invoice is created.
 /// Topics: (split, created, invoice_id)
@@ -167,5 +168,75 @@ pub fn invoice_force_resumed(env: &Env, invoice_id: u64, admin: &Address) {
     env.events().publish(
         (symbol_short!("split"), symbol_short!("frc_rsm"), invoice_id),
         admin.clone(),
+    );
+}
+
+/// Emitted when an admin freezes an invoice.
+/// Topics: (split, adm_frz, invoice_id)
+/// Data: (admin, reason)
+pub fn invoice_admin_frozen(env: &Env, invoice_id: u64, admin: &Address, reason: &String) {
+    env.events().publish(
+        (symbol_short!("split"), symbol_short!("adm_frz"), invoice_id),
+        (admin.clone(), reason.clone()),
+    );
+}
+
+/// Emitted when an admin unfreezes an invoice.
+/// Topics: (split, adm_unf, invoice_id)
+/// Data: admin
+pub fn invoice_admin_unfrozen(env: &Env, invoice_id: u64, admin: &Address) {
+    env.events().publish(
+        (symbol_short!("split"), symbol_short!("adm_unf"), invoice_id),
+        admin.clone(),
+    );
+}
+
+/// Emitted when the NFT gate contract is set or updated.
+/// Topics: (split, nft_gate, nft_contract)
+/// Data: admin
+pub fn nft_gate_set(env: &Env, nft_contract: &Option<Address>, admin: &Address) {
+    env.events().publish(
+        (symbol_short!("split"), symbol_short!("nft_gate"), nft_contract.clone()),
+        admin.clone(),
+    );
+}
+
+/// Emitted when a batch archival sweep completes.
+/// Topics: (split, btch_arc, count)
+/// Data: (admin, archived_ids)
+pub fn batch_archived(env: &Env, count: u32, archived_ids: &Vec<u64>) {
+    env.events().publish(
+        (symbol_short!("split"), symbol_short!("btch_arc"), count),
+        archived_ids.clone(),
+    );
+}
+
+/// Emitted when a timelock action is queued.
+/// Topics: (split, queued, action_id)
+/// Data: (action, admin)
+pub fn action_queued(env: &Env, action_id: u64, action: &crate::types::TimelockAction, admin: &Address) {
+    env.events().publish(
+        (symbol_short!("split"), symbol_short!("queued"), action_id),
+        (action.clone(), admin.clone()),
+    );
+}
+
+/// Emitted when a queued timelock action is executed.
+/// Topics: (split, exec, action_id)
+/// Data: action
+pub fn action_executed(env: &Env, action_id: u64, action: &crate::types::TimelockAction) {
+    env.events().publish(
+        (symbol_short!("split"), symbol_short!("exec"), action_id),
+        action.clone(),
+    );
+}
+
+/// Emitted when a queued timelock action is cancelled.
+/// Topics: (split, cancel, action_id)
+/// Data: (action, admin)
+pub fn action_cancelled(env: &Env, action_id: u64, action: &crate::types::TimelockAction, admin: &Address) {
+    env.events().publish(
+        (symbol_short!("split"), symbol_short!("cancel"), action_id),
+        (action.clone(), admin.clone()),
     );
 }
