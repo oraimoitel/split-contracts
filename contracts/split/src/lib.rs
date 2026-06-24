@@ -327,6 +327,7 @@ fn load_invoice(env: &Env, id: u64) -> Invoice {
             payment_cooldown_secs: None,
             max_payments_per_window: None,
             payment_window_secs: None,
+            refund_grace_secs: None,
         });
     let ext2: InvoiceExt2 = env.storage().persistent()
         .get(&invoice_ext2_key(id))
@@ -716,6 +717,38 @@ impl SplitContract {
     }
 
     // -----------------------------------------------------------------------
+    // Issue #203: Fee tier system for volume-based discounts
+    // -----------------------------------------------------------------------
+
+    /// Set fee tiers for volume-based creation fee discounts.
+    ///
+    /// Requires admin auth. Tiers are stored as Vec<(volume_threshold, discount_bps)>
+    /// where volume_threshold is the minimum lifetime volume required and discount_bps
+    /// is the discount in basis points (e.g., 500 = 5% discount). Tiers must be sorted
+    /// ascending by threshold. A creator gets the highest tier their lifetime volume qualifies for.
+    /// Discount applies only to creation_fee, not platform_fee_bps.
+    pub fn set_fee_tiers(env: Env, admin: Address, tiers: Vec<(i128, u32)>) {
+        require_admin(&env);
+        let _ = admin;
+
+        // Validate tiers are sorted ascending by threshold
+        for i in 0..tiers.len() {
+            if i > 0 {
+                assert!(
+                    tiers.get(i).unwrap().0 >= tiers.get(i - 1).unwrap().0,
+                    "tiers must be sorted ascending by threshold"
+                );
+            }
+            assert!(
+                tiers.get(i).unwrap().1 <= 10_000,
+                "discount_bps must be ≤ 10000"
+            );
+        }
+
+        env.storage().persistent().set(&fee_tiers_key(), &tiers);
+    }
+
+    // -----------------------------------------------------------------------
     // Issue #4: creator whitelist
     // -----------------------------------------------------------------------
 
@@ -893,6 +926,7 @@ impl SplitContract {
             options.payment_cooldown_secs,
             options.max_payments_per_window,
             options.payment_window_secs,
+            options.refund_grace_secs,
             options.priorities,
         )
     }
@@ -941,6 +975,7 @@ impl SplitContract {
         payment_cooldown_secs: Option<u64>,
         max_payments_per_window: Option<u32>,
         payment_window_secs: Option<u64>,
+        refund_grace_secs: Option<u64>,
         priorities: Vec<u32>,
     ) -> u64 {
         assert!(
@@ -1033,13 +1068,37 @@ impl SplitContract {
             }
         }
 
-        // Charge configurable creation fee in USDC.
-        let creation_fee: i128 = env
+        // Charge configurable creation fee in USDC with volume-based discount (issue #203).
+        let base_creation_fee: i128 = env
             .storage()
             .instance()
             .get(&creation_fee_key())
             .unwrap_or(0);
-        if creation_fee > 0 {
+        
+        let _creation_fee = if base_creation_fee > 0 {
+            // Get creator's lifetime volume
+            let creator_volume: i128 = env
+                .storage()
+                .persistent()
+                .get(&creator_stats_volume_key(&creator))
+                .unwrap_or(0);
+            
+            // Look up highest matching tier discount
+            let discount_bps: u32 = if let Some(tiers) = env.storage().persistent().get::<_, Vec<(i128, u32)>>(&fee_tiers_key()) {
+                let mut best_discount = 0u32;
+                for (threshold, discount) in tiers.iter() {
+                    if creator_volume >= threshold && discount > best_discount {
+                        best_discount = discount;
+                    }
+                }
+                best_discount
+            } else {
+                0u32
+            };
+            
+            // Apply discount
+            let discounted_fee = base_creation_fee - (base_creation_fee * discount_bps as i128 / 10_000);
+            
             let usdc_token: Address = env
                 .storage()
                 .instance()
@@ -1051,8 +1110,12 @@ impl SplitContract {
                 .get(&treasury_key())
                 .expect("treasury not set");
             let usdc_client = token::Client::new(env, &usdc_token);
-            usdc_client.transfer(&creator, &treasury, &creation_fee);
-        }
+            usdc_client.transfer(&creator, &treasury, &discounted_fee);
+            
+            discounted_fee
+        } else {
+            0
+        };
 
         // Issue #89: Transfer stake from creator to contract if stake_amount > 0.
         // (stake_amount is not yet wired into _create_invoice_inner; skipped)
@@ -1170,6 +1233,7 @@ impl SplitContract {
             payment_cooldown_secs,
             max_payments_per_window,
             payment_window_secs,
+            refund_grace_secs,
             cross_chain_ref,
             require_kyc: false,
             auction_on_expiry: false,
@@ -1309,6 +1373,7 @@ impl SplitContract {
                 None,
                 None,
                 None,
+                None,
                 Vec::new(&env), // priorities
             );
             ids.push_back(id);
@@ -1378,6 +1443,7 @@ impl SplitContract {
             None,
             None,
             0,
+            None,
             None,
             None,
             None,
@@ -1525,6 +1591,7 @@ impl SplitContract {
             payment_cooldown_secs: source.payment_cooldown_secs,
             max_payments_per_window: source.max_payments_per_window,
             payment_window_secs: source.payment_window_secs,
+            refund_grace_secs: source.refund_grace_secs,
             notification_contract: source.notification_contract.clone(),
             overflow_behavior,
             cross_chain_ref: source.cross_chain_ref.clone(),
@@ -2389,6 +2456,63 @@ impl SplitContract {
 
         append_audit_entry(&env, invoice_id, symbol_short!("resumed"), &creator);
         events::invoice_resumed(&env, invoice_id, &creator);
+    }
+
+    /// Remove a payer from the invoice's allowed_payers allowlist.
+    ///
+    /// Only the creator (or a co-creator) may call this. If allowed_payers is None
+    /// (open invoice), this is a no-op and does not error. Already-made payments
+    /// from the removed payer are untouched; this only blocks future payments.
+    pub fn remove_allowed_payer(env: Env, creator: Address, invoice_id: u64, payer: Address) {
+        require_not_paused(&env);
+        creator.require_auth();
+
+        let mut invoice = load_invoice(&env, invoice_id);
+        assert!(
+            invoice.creator == creator
+                || invoice.co_creators.iter().any(|c| c == creator),
+            "only creator can modify allowlist"
+        );
+
+        // No-op if allowed_payers is None (open invoice)
+        if let Some(ref mut whitelist) = invoice.allowed_payers {
+            let mut new_whitelist: Vec<Address> = Vec::new(&env);
+            for p in whitelist.iter() {
+                if p != payer {
+                    new_whitelist.push_back(p.clone());
+                }
+            }
+            invoice.allowed_payers = Some(new_whitelist);
+            save_invoice(&env, invoice_id, &invoice);
+            append_audit_entry(&env, invoice_id, symbol_short!("rem_payer"), &creator);
+        }
+    }
+
+    /// Add a payer to the invoice's allowed_payers allowlist.
+    ///
+    /// Only the creator (or a co-creator) may call this. If allowed_payers is None
+    /// (open invoice), this is a no-op and does not error. If the payer is already
+    /// in the allowlist, this is a no-op.
+    pub fn add_allowed_payer(env: Env, creator: Address, invoice_id: u64, payer: Address) {
+        require_not_paused(&env);
+        creator.require_auth();
+
+        let mut invoice = load_invoice(&env, invoice_id);
+        assert!(
+            invoice.creator == creator
+                || invoice.co_creators.iter().any(|c| c == creator),
+            "only creator can modify allowlist"
+        );
+
+        // No-op if allowed_payers is None (open invoice)
+        if let Some(ref mut whitelist) = invoice.allowed_payers {
+            // Only add if not already present
+            if !whitelist.iter().any(|p| p == payer) {
+                whitelist.push_back(payer);
+                save_invoice(&env, invoice_id, &invoice);
+                append_audit_entry(&env, invoice_id, symbol_short!("add_payer"), &creator);
+            }
+        }
     }
 
     /// Admin override: force-resume any paused invoice regardless of who paused it.
@@ -3278,6 +3402,7 @@ impl SplitContract {
                 None,
                 None,
                 None,
+                None,
                 Vec::new(env), // priorities
             );
             env.storage()
@@ -3421,8 +3546,16 @@ impl SplitContract {
             invoice.status == InvoiceStatus::Pending,
             "invoice is not pending"
         );
+
+        // Check grace period if configured
+        let refund_deadline = if let Some(grace_secs) = invoice.refund_grace_secs {
+            invoice.deadline.saturating_add(grace_secs)
+        } else {
+            invoice.deadline
+        };
+
         assert!(
-            env.ledger().timestamp() > invoice.deadline,
+            env.ledger().timestamp() > refund_deadline,
             "deadline has not passed"
         );
 
@@ -3857,6 +3990,7 @@ impl SplitContract {
             old_invoice.payment_cooldown_secs,
             old_invoice.max_payments_per_window,
             old_invoice.payment_window_secs,
+            old_invoice.refund_grace_secs,
             old_invoice.priorities.clone(),
         );
 
@@ -4071,6 +4205,7 @@ impl SplitContract {
             None,
             None,
             0,
+            None,
             None,
             None,
             None,
@@ -4369,6 +4504,42 @@ impl SplitContract {
         PaymentProof { invoice_id, payer, total_paid, proof_hash }
     }
 
+    /// Verify a payment proof against the current invoice state.
+    ///
+    /// Recomputes the hash from the current payer total and compares to the proof's hash.
+    /// Returns true only if the recomputed hash exactly matches proof.proof_hash.
+    /// Returns false (not panic) for stale proofs where the payer has since paid more.
+    /// Returns false for proofs referencing non-existent invoices.
+    /// Pure view function — no state mutation, no auth required.
+    pub fn verify_payment_proof(env: Env, proof: PaymentProof) -> bool {
+        // Return false if invoice doesn't exist
+        let invoice = if env.storage().persistent().has(&invoice_key(proof.invoice_id)) 
+            || env.storage().instance().has(&invoice_key(proof.invoice_id)) {
+            load_invoice(&env, proof.invoice_id)
+        } else {
+            return false;
+        };
+
+        // Recompute the current total for the payer
+        let current_total: i128 = invoice
+            .payments
+            .iter()
+            .filter(|p| p.payer == proof.payer)
+            .map(|p| p.amount + p.tip)
+            .sum();
+
+        // Recompute the hash using the current total
+        let mut preimage = [0u8; 24];
+        preimage[..8].copy_from_slice(&proof.invoice_id.to_be_bytes());
+        preimage[8..24].copy_from_slice(&current_total.to_be_bytes());
+
+        let bytes = Bytes::from_array(&env, &preimage);
+        let recomputed_hash: BytesN<32> = env.crypto().sha256(&bytes).into();
+
+        // Compare with the proof's hash
+        recomputed_hash == proof.proof_hash
+    }
+
     /// Return all invoice IDs that include `recipient` as a recipient (issue #40).
     pub fn get_recipient_invoice_ids(env: Env, recipient: Address) -> Vec<u64> {
         env.storage()
@@ -4521,6 +4692,7 @@ impl SplitContract {
                 auto_resolve_rules: Vec::new(&env), creator_cosigner: None, velocity_limit: 0,
                 velocity_window: 0, parent_invoice_id: None, pause_reason: None, auto_resume_at: None,
                 payment_cooldown_secs: None, max_payments_per_window: None, payment_window_secs: None,
+                refund_grace_secs: None,
             });
         let ext2: InvoiceExt2 = env.storage().persistent()
             .get(&invoice_ext2_key(invoice_id))

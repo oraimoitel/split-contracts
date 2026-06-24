@@ -233,6 +233,8 @@ pub struct InvoiceOptions {
     pub payment_window_secs: Option<u64>,
     /// Issue: per-recipient release priorities (parallel to recipients); empty = no ordering.
     pub priorities: Vec<u32>,
+    /// Issue #199: grace period in seconds after deadline before refund is allowed.
+    pub refund_grace_secs: Option<u64>,
 }
 
 /// Legacy invoice layout used by stored invoices created before the `version`
@@ -336,6 +338,8 @@ pub struct InvoiceExt {
     pub payment_cooldown_secs: Option<u64>,
     pub max_payments_per_window: Option<u32>,
     pub payment_window_secs: Option<u64>,
+    /// Issue #199: grace period in seconds after deadline before refund is allowed.
+    pub refund_grace_secs: Option<u64>,
 }
 
 #[contracttype]
@@ -414,6 +418,8 @@ pub struct Invoice {
     pub payment_cooldown_secs: Option<u64>,
     pub max_payments_per_window: Option<u32>,
     pub payment_window_secs: Option<u64>,
+    /// Issue #199: grace period in seconds after deadline before refund is allowed.
+    pub refund_grace_secs: Option<u64>,
     pub notification_contract: Option<Address>,
     pub overflow_behavior: OverflowBehavior,
     pub cross_chain_ref: Option<String>,
@@ -493,6 +499,7 @@ impl Invoice {
                 payment_cooldown_secs: self.payment_cooldown_secs,
                 max_payments_per_window: self.max_payments_per_window,
                 payment_window_secs: self.payment_window_secs,
+                refund_grace_secs: self.refund_grace_secs,
             },
             InvoiceExt2 {
                 notification_contract: self.notification_contract,
@@ -569,6 +576,7 @@ impl Invoice {
             payment_cooldown_secs: ext.payment_cooldown_secs,
             max_payments_per_window: ext.max_payments_per_window,
             payment_window_secs: ext.payment_window_secs,
+            refund_grace_secs: ext.refund_grace_secs,
             notification_contract: ext2.notification_contract,
             overflow_behavior: ext2.overflow_behavior,
             cross_chain_ref: ext2.cross_chain_ref,
@@ -752,6 +760,7 @@ impl Invoice {
             payment_cooldown_secs: None,
             max_payments_per_window: None,
             payment_window_secs: None,
+            refund_grace_secs: None,
             forward_to: None,
             forward_invoice_id: None,
             notification_contract: None,

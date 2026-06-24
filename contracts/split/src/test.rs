@@ -73,6 +73,7 @@ fn default_options(env: &Env) -> InvoiceOptions {
         payment_cooldown_secs: None,
         max_payments_per_window: None,
         payment_window_secs: None,
+        refund_grace_secs: None,
         priorities: Vec::new(env),
     }
 }
@@ -120,6 +121,7 @@ fn invoice_options(
         payment_cooldown_secs: cooldown_secs,
         max_payments_per_window: max_payments,
         payment_window_secs: window_secs,
+        refund_grace_secs: None,
         priorities: Vec::new(env),
     }
 }
