@@ -4567,7 +4567,7 @@ fn test_clone_with_overrides_replaces_fields() {
         new_deadline: Some(19_999),
         new_amounts: Some(new_amounts.clone()),
         new_recipients: Some(new_recipients.clone()),
-        new_overflow_behavior: Some(types::OverflowBehavior::Refund),
+        new_overflow_behavior: Some(1_u32),
     };
     let clone_id = c.clone_invoice(&creator, &source_id, &overrides);
 

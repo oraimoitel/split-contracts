@@ -6,7 +6,7 @@ pub struct CloneOverrides {
     pub new_deadline: Option<u64>,
     pub new_amounts: Option<Vec<i128>>,
     pub new_recipients: Option<Vec<Address>>,
-    pub new_overflow_behavior: Option<OverflowBehavior>,
+    pub new_overflow_behavior: Option<u32>,
 }
 
 /// Issue: Split rule for a single recipient — evaluated at release time.
@@ -40,7 +40,7 @@ pub struct ResolveRule {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OverflowBehavior {
     Reject,
     Refund,
@@ -318,6 +318,11 @@ pub struct InvoiceExt {
     pub velocity_limit: i128,
     pub velocity_window: u64,
     pub parent_invoice_id: Option<u64>,
+    pub pause_reason: Option<String>,
+    pub auto_resume_at: Option<u64>,
+    pub payment_cooldown_secs: Option<u64>,
+    pub max_payments_per_window: Option<u32>,
+    pub payment_window_secs: Option<u64>,
 }
 
 #[contracttype]
@@ -466,6 +471,11 @@ impl Invoice {
                 velocity_limit: self.velocity_limit,
                 velocity_window: self.velocity_window,
                 parent_invoice_id: self.parent_invoice_id,
+                pause_reason: self.pause_reason,
+                auto_resume_at: self.auto_resume_at,
+                payment_cooldown_secs: self.payment_cooldown_secs,
+                max_payments_per_window: self.max_payments_per_window,
+                payment_window_secs: self.payment_window_secs,
             },
             InvoiceExt2 {
                 notification_contract: self.notification_contract,
@@ -536,6 +546,11 @@ impl Invoice {
             velocity_limit: ext.velocity_limit,
             velocity_window: ext.velocity_window,
             parent_invoice_id: ext.parent_invoice_id,
+            pause_reason: ext.pause_reason,
+            auto_resume_at: ext.auto_resume_at,
+            payment_cooldown_secs: ext.payment_cooldown_secs,
+            max_payments_per_window: ext.max_payments_per_window,
+            payment_window_secs: ext.payment_window_secs,
             notification_contract: ext2.notification_contract,
             overflow_behavior: ext2.overflow_behavior,
             cross_chain_ref: ext2.cross_chain_ref,
