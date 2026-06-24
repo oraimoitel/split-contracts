@@ -4935,3 +4935,280 @@ fn test_partial_release_priority_order() {
     // funded should be decremented by the full release_amount regardless of how much was transferred
     assert_eq!(c.get_invoice(&id).funded, 0);
 }
+
+// ---------------------------------------------------------------------------
+// Compact storage encoding tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_compact_invoice_roundtrip() {
+    let (env, contract_id, token_id) = setup();
+    let c = client(&env, &contract_id);
+
+    let creator = Address::generate(&env);
+    let payer1 = Address::generate(&env);
+    let payer2 = Address::generate(&env);
+    let payer3 = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let sa = StellarAssetClient::new(&env, &token_id);
+    sa.mint(&payer1, &100);
+    sa.mint(&payer2, &100);
+    sa.mint(&payer3, &100);
+    env.ledger().set_timestamp(1_000);
+
+    // Create invoice with multiple payments
+    let id = make_invoice(&env, &c, &creator, &recipient, 300, &token_id, 5_000);
+    
+    c.pay(&payer1, &id, &100_i128, &0_u64, &false);
+    c.pay(&payer2, &id, &100_i128, &0_u64, &false);
+    c.pay(&payer3, &id, &100_i128, &0_u64, &false);
+
+    // Get invoice parts from contract
+    let core = c.get_invoice(&id);
+    let ext = c.get_invoice_ext(&id);
+    let ext2 = c.get_invoice_ext2(&id);
+    
+    assert_eq!(core.status, InvoiceStatus::Released);
+    assert_eq!(core.funded, 300);
+    assert_eq!(core.deadline, 5_000);
+    assert_eq!(core.payments.len(), 3);
+
+    // Assemble full invoice for compact encoding
+    let invoice = Invoice::assemble(core.clone(), ext.clone(), ext2.clone());
+    let compact = invoice.to_compact(&env);
+    
+    // Verify compact uses fewer bytes than raw struct
+    // status(1) + funded(16) + deadline(8) = 25 bytes
+    assert_eq!(compact.data.len(), 25);
+    
+    // Verify round-trip fidelity
+    let invoice_restored = Invoice::from_compact(&compact, core.clone(), ext.clone(), ext2.clone());
+    
+    assert_eq!(invoice_restored.status, core.status);
+    assert_eq!(invoice_restored.funded, core.funded);
+    assert_eq!(invoice_restored.deadline, core.deadline);
+    assert_eq!(invoice_restored.payments.len(), core.payments.len());
+    assert_eq!(invoice_restored.recipients.len(), core.recipients.len());
+    assert_eq!(invoice_restored.amounts.len(), core.amounts.len());
+}
+
+#[test]
+fn test_compact_invoice_all_statuses() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let creator = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = Address::generate(&env);
+    
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient);
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(100_i128);
+    
+    // Test all invoice statuses
+    use soroban_sdk::vec as soroban_vec;
+    let statuses = soroban_vec![
+        &env,
+        InvoiceStatus::Pending,
+        InvoiceStatus::Released,
+        InvoiceStatus::Refunded,
+        InvoiceStatus::Cancelled,
+    ];
+    
+    for status in statuses {
+        let core = InvoiceCore {
+            version: 2,
+            creator: creator.clone(),
+            co_creators: Vec::new(&env),
+            recipients: recipients.clone(),
+            amounts: amounts.clone(),
+            tokens: {
+                let mut tokens = Vec::new(&env);
+                tokens.push_back(token.clone());
+                tokens
+            },
+            deadline: 9_999,
+            funded: 50,
+            status: status.clone(),
+            payments: Vec::new(&env),
+            drip_duration: None,
+            release_timestamp: None,
+            claimed: Vec::new(&env),
+            frozen: false,
+            completion_time: None,
+            allow_early_withdrawal: false,
+            bonus_pool: 0,
+            bonus_max_payers: 0,
+            prerequisite_id: None,
+            tranches: Vec::new(&env),
+            released_bps: 0,
+            clone_depth: 0,
+        };
+        
+        let ext = InvoiceExt {
+            co_signers: Vec::new(&env),
+            required_signatures: 0,
+            signatures: Vec::new(&env),
+            approver: None,
+            approved: false,
+            oracle_address: None,
+            condition_met: false,
+            penalty_bps: 0,
+            penalty_deadline: 0,
+            min_funding_bps: 0,
+            release_stages: Vec::new(&env),
+            released_stages: 0,
+            allowed_payers: None,
+            price_oracle: None,
+            base_amounts: Vec::new(&env),
+            swap_tokens: Vec::new(&env),
+            tax_bps: 0,
+            tax_authority: None,
+            insurance_premium_bps: 0,
+            insurance_fund: 0,
+            smart_route: false,
+            convert_to_stream: false,
+            accepted_tokens: Vec::new(&env),
+            forward_to: None,
+            forward_invoice_id: None,
+            split_rules: Vec::new(&env),
+            auto_resolve_rules: Vec::new(&env),
+            creator_cosigner: None,
+            velocity_limit: 0,
+            velocity_window: 0,
+            parent_invoice_id: None,
+            pause_reason: None,
+            auto_resume_at: None,
+            payment_cooldown_secs: None,
+            max_payments_per_window: None,
+            payment_window_secs: None,
+        };
+        
+        let ext2 = InvoiceExt2 {
+            notification_contract: None,
+            overflow_behavior: OverflowBehavior::Reject,
+            cross_chain_ref: None,
+            require_kyc: false,
+            auction_on_expiry: false,
+            auction_end: 0,
+            bids: Vec::new(&env),
+            min_payment: 0,
+            min_funding_amount: 0,
+            priorities: Vec::new(&env),
+        };
+        
+        let invoice = Invoice::assemble(core.clone(), ext.clone(), ext2.clone());
+        let compact = invoice.to_compact(&env);
+        let restored = Invoice::from_compact(&compact, core, ext, ext2);
+        
+        assert_eq!(restored.status, status);
+        assert_eq!(restored.funded, 50);
+        assert_eq!(restored.deadline, 9_999);
+    }
+}
+
+#[test]
+fn test_compact_invoice_extreme_values() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let creator = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = Address::generate(&env);
+    
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient);
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(100_i128);
+    
+    // Test with maximum values
+    let core = InvoiceCore {
+        version: 2,
+        creator: creator.clone(),
+        co_creators: Vec::new(&env),
+        recipients: recipients.clone(),
+        amounts: amounts.clone(),
+        tokens: {
+            let mut tokens = Vec::new(&env);
+            tokens.push_back(token.clone());
+            tokens
+        },
+        deadline: u64::MAX,
+        funded: i128::MAX,
+        status: InvoiceStatus::Pending,
+        payments: Vec::new(&env),
+        drip_duration: None,
+        release_timestamp: None,
+        claimed: Vec::new(&env),
+        frozen: false,
+        completion_time: None,
+        allow_early_withdrawal: false,
+        bonus_pool: 0,
+        bonus_max_payers: 0,
+        prerequisite_id: None,
+        tranches: Vec::new(&env),
+        released_bps: 0,
+        clone_depth: 0,
+    };
+    
+    let ext = InvoiceExt {
+        co_signers: Vec::new(&env),
+        required_signatures: 0,
+        signatures: Vec::new(&env),
+        approver: None,
+        approved: false,
+        oracle_address: None,
+        condition_met: false,
+        penalty_bps: 0,
+        penalty_deadline: 0,
+        min_funding_bps: 0,
+        release_stages: Vec::new(&env),
+        released_stages: 0,
+        allowed_payers: None,
+        price_oracle: None,
+        base_amounts: Vec::new(&env),
+        swap_tokens: Vec::new(&env),
+        tax_bps: 0,
+        tax_authority: None,
+        insurance_premium_bps: 0,
+        insurance_fund: 0,
+        smart_route: false,
+        convert_to_stream: false,
+        accepted_tokens: Vec::new(&env),
+        forward_to: None,
+        forward_invoice_id: None,
+        split_rules: Vec::new(&env),
+        auto_resolve_rules: Vec::new(&env),
+        creator_cosigner: None,
+        velocity_limit: 0,
+        velocity_window: 0,
+        parent_invoice_id: None,
+        pause_reason: None,
+        auto_resume_at: None,
+        payment_cooldown_secs: None,
+        max_payments_per_window: None,
+        payment_window_secs: None,
+    };
+    
+    let ext2 = InvoiceExt2 {
+        notification_contract: None,
+        overflow_behavior: OverflowBehavior::Reject,
+        cross_chain_ref: None,
+        require_kyc: false,
+        auction_on_expiry: false,
+        auction_end: 0,
+        bids: Vec::new(&env),
+        min_payment: 0,
+        min_funding_amount: 0,
+        priorities: Vec::new(&env),
+    };
+    
+    let invoice = Invoice::assemble(core.clone(), ext.clone(), ext2.clone());
+    let compact = invoice.to_compact(&env);
+    let restored = Invoice::from_compact(&compact, core, ext, ext2);
+    
+    assert_eq!(restored.funded, i128::MAX);
+    assert_eq!(restored.deadline, u64::MAX);
+}
