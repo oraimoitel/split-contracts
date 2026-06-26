@@ -28,7 +28,7 @@ jobs:
         run: cargo build --target wasm32-unknown-unknown --release --workspace
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
 
       - name: Install stellar-cli
         run: cargo install --locked stellar-cli
