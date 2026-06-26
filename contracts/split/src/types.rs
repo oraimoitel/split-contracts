@@ -85,6 +85,7 @@ pub struct Payment {
     pub amount: i128,
     pub tip: i128,
     pub attestation_hash: Option<BytesN<32>>,
+    pub donate_on_failure: bool,
 }
 
 #[contracttype]
@@ -232,6 +233,8 @@ pub struct InvoiceOptions {
     pub refund_grace_secs: Option<u64>,
     /// Scheduled release timestamp (issue #207).
     pub scheduled_release_at: Option<u64>,
+    /// KYC verification requirement.
+    pub require_kyc: bool,
 }
 
 /// Legacy invoice layout used by stored invoices created before the `version`
@@ -336,6 +339,9 @@ pub struct InvoiceExt {
     pub max_payments_per_window: Option<u32>,
     pub payment_window_secs: Option<u64>,
     pub scheduled_release_at: Option<u64>,
+    pub penalty_tiers: Vec<PenaltyTier>,
+    pub allowed_callers: Option<Vec<Address>>,
+    pub refund_grace_secs: Option<u64>,
 }
 
 #[contracttype]
@@ -349,12 +355,21 @@ pub struct InvoiceExt2 {
     pub arbiter: Option<Address>,
     /// Issue #188: whether this invoice is under active dispute.
     pub disputed: bool,
+    pub admin_frozen: bool,
     pub auction_on_expiry: bool,
     pub auction_end: u64,
     pub bids: Vec<Bid>,
     pub min_payment: i128,
     pub min_funding_amount: i128,
     pub priorities: Vec<u32>,
+}
+
+/// Issue #211: A single escalating penalty tier (seconds_after_deadline, bps).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PenaltyTier {
+    pub seconds_after_deadline: u64,
+    pub bps: u32,
 }
 
 /// Timelocked admin action queued for future execution.
@@ -439,8 +454,8 @@ pub struct Invoice {
     pub scheduled_release_at: Option<u64>,
     /// Issue #199: grace period in seconds after deadline before refund is allowed.
     pub refund_grace_secs: Option<u64>,
-    /// Issue #211: escalating penalty tiers — each (seconds_after_deadline, bps).
-    pub penalty_tiers: Vec<(u64, u32)>,
+    /// Issue #211: escalating penalty tiers.
+    pub penalty_tiers: Vec<PenaltyTier>,
     /// Issue #208: restrict payments to specific calling contracts; None = open.
     pub allowed_callers: Option<Vec<Address>>,
     pub notification_contract: Option<Address>,
@@ -449,6 +464,7 @@ pub struct Invoice {
     pub require_kyc: bool,
     pub arbiter: Option<Address>,
     pub disputed: bool,
+    pub admin_frozen: bool,
     pub auction_on_expiry: bool,
     pub auction_end: u64,
     pub bids: Vec<Bid>,
@@ -523,6 +539,9 @@ impl Invoice {
                 max_payments_per_window: self.max_payments_per_window,
                 payment_window_secs: self.payment_window_secs,
                 scheduled_release_at: self.scheduled_release_at,
+                penalty_tiers: self.penalty_tiers,
+                allowed_callers: self.allowed_callers,
+                refund_grace_secs: self.refund_grace_secs,
             },
             InvoiceExt2 {
                 notification_contract: self.notification_contract,
@@ -531,6 +550,7 @@ impl Invoice {
                 require_kyc: self.require_kyc,
                 arbiter: self.arbiter,
                 disputed: self.disputed,
+                admin_frozen: self.admin_frozen,
                 auction_on_expiry: self.auction_on_expiry,
                 auction_end: self.auction_end,
                 bids: self.bids,
@@ -602,12 +622,16 @@ impl Invoice {
             max_payments_per_window: ext.max_payments_per_window,
             payment_window_secs: ext.payment_window_secs,
             scheduled_release_at: ext.scheduled_release_at,
+            penalty_tiers: ext.penalty_tiers,
+            allowed_callers: ext.allowed_callers,
+            refund_grace_secs: ext.refund_grace_secs,
             notification_contract: ext2.notification_contract,
             overflow_behavior: ext2.overflow_behavior,
             cross_chain_ref: ext2.cross_chain_ref,
             require_kyc: ext2.require_kyc,
             arbiter: ext2.arbiter,
             disputed: ext2.disputed,
+            admin_frozen: ext2.admin_frozen,
             auction_on_expiry: ext2.auction_on_expiry,
             auction_end: ext2.auction_end,
             bids: ext2.bids,
@@ -798,10 +822,12 @@ impl Invoice {
             require_kyc: false,
             arbiter: None,
             disputed: false,
+            admin_frozen: false,
             auction_on_expiry: false,
             auction_end: 0,
             bids: Vec::new(env),
             min_payment: 0,
+            min_funding_amount: 0,
             split_rules: Vec::new(env),
             auto_resolve_rules: Vec::new(env),
             creator_cosigner: None,
@@ -814,7 +840,7 @@ impl Invoice {
             payment_window_secs: None,
             scheduled_release_at: None,
             refund_grace_secs: None,
-            penalty_tiers: Vec::new(env),
+            penalty_tiers: Vec::<PenaltyTier>::new(env),
             allowed_callers: None,
             forward_to: None,
             forward_invoice_id: None,

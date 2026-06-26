@@ -74,6 +74,8 @@ fn default_options(env: &Env) -> InvoiceOptions {
         payment_window_secs: None,
         refund_grace_secs: None,
         priorities: Vec::new(env),
+        require_kyc: false,
+        scheduled_release_at: None,
     }
 }
 
@@ -121,6 +123,8 @@ fn invoice_options(
         payment_window_secs: window_secs,
         refund_grace_secs: None,
         priorities: Vec::new(env),
+        require_kyc: false,
+        scheduled_release_at: None,
     }
 }
 
@@ -480,7 +484,7 @@ fn test_template_overwrite() {
     amounts2.push_back(75_i128);
     c.save_template(&creator, &name, &recipients2, &amounts2, &token_id);
 
-    let id = c.create_from_template(&creator, &name, &9_999_u64);
+    let id = c.create_from_template(&creator, &name, &9_999_u64, &None);
     let invoice = c.get_invoice(&id);
     assert_eq!(invoice.recipients.get_unchecked(0), r2);
     assert_eq!(invoice.amounts.get_unchecked(0), 75_i128);
@@ -4677,7 +4681,7 @@ fn test_clone_copies_recipients_and_amounts() {
         new_deadline: None,
         new_amounts: None,
         new_recipients: None,
-        new_overflow_behavior: Vec::new(&env),
+        new_overflow_behavior: None,
     };
     let clone_id = c.clone_invoice(&creator, &source_id, &overrides);
 
@@ -4748,7 +4752,7 @@ fn test_clone_depth_limit_enforced() {
         new_deadline: None,
         new_amounts: None,
         new_recipients: None,
-        new_overflow_behavior: Vec::new(&env),
+        new_overflow_behavior: None,
     };
 
     let id0 = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 9_999);
@@ -4799,7 +4803,7 @@ fn test_clone_resets_payment_state() {
         new_deadline: None,
         new_amounts: None,
         new_recipients: None,
-        new_overflow_behavior: Vec::new(&env),
+        new_overflow_behavior: None,
     };
     let clone_id = c.clone_invoice(&creator, &source_id, &overrides);
 
@@ -4855,7 +4859,7 @@ fn test_sharded_payment_storage() {
     let mut populated_shards: u64 = 0;
     env.as_contract(&contract_id, || {
         for shard_id in 0..8_u64 {
-            let key = (soroban_sdk::symbol_short!("pay_shard"), invoice_id, shard_id);
+            let key = (soroban_sdk::symbol_short!("pay_sh"), invoice_id, shard_id);
             if env.storage().persistent().has(&key) {
                 populated_shards += 1;
             }
@@ -4927,7 +4931,7 @@ fn test_donate_on_failure_mixed_payers() {
     // Invoice needs 500; partially funded by a donor and a normal payer.
     let id = make_invoice(&env, &c, &creator, &recipient, 500, &token_id, 2_000);
     c.pay(&donor,   &id, &100_i128, &0_u64, &false, &true);   // donate
-    c.pay(&refundee, &id, &100_i128, &1_u64, &false, &false); // normal
+    c.pay(&refundee, &id, &100_i128, &0_u64, &false, &false); // normal
 
     env.ledger().set_timestamp(3_000);
     c.refund(&id);
